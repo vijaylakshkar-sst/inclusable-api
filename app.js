@@ -1,0 +1,32 @@
+const express = require('express');
+const cors = require('cors');
+require('dotenv').config();
+
+const eventRoutes = require('./routes/eventRoutes');
+const userRoutes = require('./routes/userRoutes');
+const ndisRoutes = require('./routes/ndisRoutes');
+const locationAccessibilityRoutes = require('./routes/locationAccessibilityRoutes');
+const bookingRoutes = require('./routes/bookingRoutes');
+const legalContentRoutes = require('./routes/legalContentRoutes');
+
+
+const companyEventsRoutes = require('./routes/companyEventsRoutes');
+
+const app = express();
+
+app.use(cors());
+app.use(express.json());
+
+app.use('/api/v1', eventRoutes);
+app.use('/api/v1', userRoutes);
+app.use('/api/v1', ndisRoutes);
+app.use('/api/v1', locationAccessibilityRoutes);
+app.use('/api/v1', bookingRoutes);
+app.use('/api/v1', legalContentRoutes);
+
+
+app.use('/api/v1', companyEventsRoutes);
+// Serve images statically
+app.use('/uploads', express.static(__dirname + '/uploads'));
+
+module.exports = app;
