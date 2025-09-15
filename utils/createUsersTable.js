@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS users (
     verification_code VARCHAR(10),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    deleted_at TIMESTAMP NULL  
 );`;
 
 (async () => {

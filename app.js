@@ -9,10 +9,13 @@ const locationAccessibilityRoutes = require('./routes/locationAccessibilityRoute
 const bookingRoutes = require('./routes/bookingRoutes');
 const legalContentRoutes = require('./routes/legalContentRoutes');
 const companyEventsRoutes = require('./routes/companyEventsRoutes');
+const webhookRoutes = require('./routes/webhookRoutes');
 
 // =============Admin Routes==========================
 const termsConditionsRoutes = require('./routes/admin/termsConditionsRoutes');
 const privacyPolicyRoutes = require('./routes/admin/privacyPolicyRoutes');
+const dashboardRoutes = require('./routes/admin/dashboardRoutes');
+const userAdminRoutes = require('./routes/admin/userRoutes');
 
 const app = express();
 
@@ -25,6 +28,7 @@ app.use('/api/v1', ndisRoutes);
 app.use('/api/v1', locationAccessibilityRoutes);
 app.use('/api/v1', bookingRoutes);
 app.use('/api/v1', legalContentRoutes);
+app.use('/api/v1', webhookRoutes);
 
 
 app.use('/api/v1', companyEventsRoutes);
@@ -34,6 +38,9 @@ app.use('/uploads', express.static(__dirname + '/uploads'));
 //=====================Admin==============================
 app.use('/api/v1/admin/terms-conditions', termsConditionsRoutes);
 app.use('/api/v1/admin/privacy-policy', privacyPolicyRoutes);
+app.use('/api/v1/admin/dashboard', dashboardRoutes);
+app.use('/api/v1/admin/users', userAdminRoutes);
+
 
 
 module.exports = app;

@@ -2,7 +2,7 @@ const pool = require('../dbconfig');
 
 const alterEventBookings_addStatus = `
   ALTER TABLE event_bookings
-  ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'confirmed';
+  ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'pending';
 `;
 
 (async () => {

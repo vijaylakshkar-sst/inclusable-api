@@ -1,14 +1,15 @@
 const pool = require('../dbconfig');
 const { eventCreateSchema, eventUpdateSchema } = require('../validators/companyEventValidator');
+const stripe = require('../stripe');
 const BASE_EVENT_IMAGE_URL = process.env.BASE_EVENT_IMAGE_URL;
 const BASE_IMAGE_URL = process.env.BASE_IMAGE_URL;
 exports.createCompanyEvent = async (req, res) => {
 
-    const validation = eventCreateSchema.validate(req.body);
-    if (validation.error) {
-        return res.status(400).json({ error: validation.error.details[0].message });
-    }
-    
+  const validation = eventCreateSchema.validate(req.body);
+  if (validation.error) {
+    return res.status(400).json({ error: validation.error.details[0].message });
+  }
+
   const {
     event_name,
     event_types,
@@ -565,6 +566,60 @@ exports.getEvents = async (req, res) => {
   }
 };
 
+// exports.createEventBooking = async (req, res) => {
+//   const user_id = req.user?.userId;
+//   const {
+//     company_id,
+//     event_id,
+//     event_price,
+//     number_of_tickets,
+//     total_amount,
+//     attendee_info // 👈 should be an array of { name, email }
+//   } = req.body;
+
+//   if (!user_id || !event_id || !company_id || !number_of_tickets || !total_amount) {
+//     return res.status(400).json({ status: false, error: 'Missing required fields' });
+//   }
+// console.log("Inserting booking for event_id:", event_id);
+//   // Optional: Validate attendee_info length === number_of_tickets
+
+// const eventCheck = await pool.query(
+//   'SELECT id FROM company_events WHERE id = $1 AND user_id = $2',
+//   [event_id, company_id]
+// );
+
+// if (eventCheck.rows.length === 0) {
+//   return res.status(400).json({ status: false, error: 'Invalid event_id or event does not belong to the specified company.' });
+// }
+
+//   try {
+//     const query = `
+//       INSERT INTO event_bookings (
+//         user_id, company_id, event_id, event_price, number_of_tickets,
+//         total_amount, attendee_info
+//       ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+//     `;
+
+//     const values = [
+//       user_id,
+//       company_id,
+//       event_id,
+//       event_price || null,
+//       number_of_tickets,
+//       total_amount,
+//       JSON.stringify(attendee_info || [])
+//     ];
+
+//     await pool.query(query, values);
+
+//     res.status(201).json({ status: true, message: 'Booking successful' });
+//   } catch (err) {
+//     console.error('Booking Error:', err.message);
+//     res.status(500).json({ status: false, error: 'Internal server error' });
+//   }
+// };
+
+
 exports.createEventBooking = async (req, res) => {
   const user_id = req.user?.userId;
   const {
@@ -573,33 +628,48 @@ exports.createEventBooking = async (req, res) => {
     event_price,
     number_of_tickets,
     total_amount,
-    attendee_info // 👈 should be an array of { name, email }
+    attendee_info // [{ name, email }]
   } = req.body;
 
+  // Basic validation
   if (!user_id || !event_id || !company_id || !number_of_tickets || !total_amount) {
     return res.status(400).json({ status: false, error: 'Missing required fields' });
   }
-console.log("Inserting booking for event_id:", event_id);
-  // Optional: Validate attendee_info length === number_of_tickets
 
- const eventCheck = await pool.query(
-  'SELECT id FROM company_events WHERE id = $1 AND user_id = $2',
-  [event_id, company_id]
-);
+  // Optional: Validate number of attendees
+  if (attendee_info && attendee_info.length !== number_of_tickets) {
+    return res.status(400).json({ status: false, error: 'Attendee count mismatch with number_of_tickets' });
+  }
 
-if (eventCheck.rows.length === 0) {
-  return res.status(400).json({ status: false, error: 'Invalid event_id or event does not belong to the specified company.' });
-}
+  // Check if event exists and belongs to company
+  const eventCheck = await pool.query(
+    'SELECT id FROM company_events WHERE id = $1 AND user_id = $2',
+    [event_id, company_id]
+  );
+
+  if (eventCheck.rows.length === 0) {
+    return res.status(400).json({
+      status: false,
+      error: 'Invalid event_id or event does not belong to the specified company.',
+    });
+  }
+
+  const client = await pool.connect();
 
   try {
-    const query = `
+    await client.query('BEGIN');
+
+    // 1. Insert into event_bookings with payment_status = pending
+    const bookingInsertQuery = `
       INSERT INTO event_bookings (
         user_id, company_id, event_id, event_price, number_of_tickets,
-        total_amount, attendee_info
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+        total_amount, attendee_info, status
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')
+      RETURNING id
     `;
 
-    const values = [
+    const bookingValues = [
       user_id,
       company_id,
       event_id,
@@ -609,11 +679,49 @@ if (eventCheck.rows.length === 0) {
       JSON.stringify(attendee_info || [])
     ];
 
-    await pool.query(query, values);
+    const bookingResult = await client.query(bookingInsertQuery, bookingValues);
+    const booking_id = bookingResult.rows[0].id;
 
-    res.status(201).json({ status: true, message: 'Booking successful' });
+    // 2. Create Stripe PaymentIntent (AUD)
+    const paymentIntent = await stripe.paymentIntents.create({
+      amount: Math.round(total_amount * 100), // Convert to cents
+      currency: 'aud',
+      metadata: {
+        booking_id: booking_id,
+        user_id: user_id,
+        event_id: event_id,
+      },
+    });
+
+    // 3. Insert into transactions table
+    await client.query(
+      `INSERT INTO transactions (booking_id, user_id, event_id, payment_intent_id, amount, currency, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [
+        booking_id,
+        user_id,
+        event_id,
+        paymentIntent.id,
+        total_amount,
+        'aud',
+        'pending'
+      ]
+    );
+
+    await client.query('COMMIT');
+
+    return res.status(201).json({
+      status: true,
+      message: 'Booking initiated. Complete payment to confirm.',
+      clientSecret: paymentIntent.client_secret,
+      bookingId: booking_id
+    });
+
   } catch (err) {
-    console.error('Booking Error:', err.message);
-    res.status(500).json({ status: false, error: 'Internal server error' });
+    await client.query('ROLLBACK');
+    console.error('❌ Booking Error:', err.message);
+    return res.status(500).json({ status: false, error: 'Internal server error' });
+  } finally {
+    client.release();
   }
 };
