@@ -8,9 +8,11 @@ const ndisRoutes = require('./routes/ndisRoutes');
 const locationAccessibilityRoutes = require('./routes/locationAccessibilityRoutes');
 const bookingRoutes = require('./routes/bookingRoutes');
 const legalContentRoutes = require('./routes/legalContentRoutes');
-
-
 const companyEventsRoutes = require('./routes/companyEventsRoutes');
+
+// =============Admin Routes==========================
+const termsConditionsRoutes = require('./routes/admin/termsConditionsRoutes');
+const privacyPolicyRoutes = require('./routes/admin/privacyPolicyRoutes');
 
 const app = express();
 
@@ -28,5 +30,10 @@ app.use('/api/v1', legalContentRoutes);
 app.use('/api/v1', companyEventsRoutes);
 // Serve images statically
 app.use('/uploads', express.static(__dirname + '/uploads'));
+
+//=====================Admin==============================
+app.use('/api/v1/admin/terms-conditions', termsConditionsRoutes);
+app.use('/api/v1/admin/privacy-policy', privacyPolicyRoutes);
+
 
 module.exports = app;

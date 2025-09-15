@@ -43,7 +43,7 @@ exports.getUserBookings = async (req, res) => {
     res.json({ status: true, bookings });
   } catch (err) {
     console.error('Get User Bookings Error:', err.message);
-    res.status(500).json({ error: 'Failed to fetch bookings' });
+    res.status(500).json({ status: false, error: 'Failed to fetch bookings' });
   }
 };
 
@@ -74,7 +74,7 @@ exports.getUserBookingById = async (req, res) => {
     const result = await pool.query(query, [id, user_id]);
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Booking not found' });
+      return res.status(404).json({ status: false, error: 'Booking not found' });
     }
 
     const booking = result.rows[0];
@@ -94,6 +94,6 @@ exports.getUserBookingById = async (req, res) => {
     res.json({ status: true, data: booking });
   } catch (err) {
     console.error('Get Booking Details Error:', err.message);
-    res.status(500).json({ error: 'Failed to fetch booking details' });
+    res.status(500).json({ status: false, error: 'Failed to fetch booking details' });
   }
 };

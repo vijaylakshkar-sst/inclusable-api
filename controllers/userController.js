@@ -4,6 +4,7 @@ const bcrypt = require('bcrypt');
 const multer = require('multer');
 const path = require('path');
 const jwt = require('jsonwebtoken');
+const { stat } = require('fs');
 
 // const EMAIL_FROM = process.env.EMAIL_FROM ;
 // const EMAIL_PASS = process.env.EMAIL_PASS ;
@@ -277,6 +278,7 @@ exports.register = async (req, res) => {
     await pool.query(query, values);
 
     res.status(200).json({
+      status: true,
       message: `Registration successful as ${role}. Please verify your email.`,
       verification_code
     });
@@ -309,6 +311,7 @@ exports.verifyEmail = async (req, res) => {
     // Issue JWT after verification
     const token = jwt.sign({ userId: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
     res.json({
+      status: true,
       message: 'Email verified successfully.',
       token,
       user: {
@@ -356,10 +359,10 @@ exports.resendVerificationCode = async (req, res) => {
     //   text: `Your new verification code is: ${newCode}`,
     //   html: `<p>Your new verification code is: <b>${newCode}</b></p>`
     // });
-    res.json({ message: 'Verification code resent.', verification_code: newCode });
+    res.json({status: true, message: 'Verification code resent.', verification_code: newCode });
   } catch (err) {
     console.error('Resend verification error:', err.message);
-    res.status(500).json({ error: 'Internal server error.' });
+    res.status(500).json({status: false, error: 'Internal server error.' });
   }
 };
 
@@ -379,10 +382,10 @@ exports.addAdditionalDetails = async (req, res) => {
          ON CONFLICT (user_id, step_name) DO NOTHING`,
         [userId, 'additional_details']
       );
-      return res.json({ message: 'User skipped additional details.' });
+      return res.json({ status: true, message: 'User skipped additional details.' });
     } catch (err) {
       console.error('Skip additional details error:', err.message);
-      return res.status(500).json({ error: 'Internal server error.' });
+      return res.status(500).json({ status: false, error: 'Internal server error.' });
     }
   }
   if (req.file) {
@@ -391,7 +394,7 @@ exports.addAdditionalDetails = async (req, res) => {
   try {
     const userRes = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
     if (userRes.rows.length === 0) {
-      return res.status(404).json({ error: 'User not found.' });
+      return res.status(404).json({ status: false, error: 'User not found.' });
     }
     await pool.query(
       `UPDATE users SET profile_image = COALESCE($1, profile_image), date_of_birth = COALESCE($2, date_of_birth), gender = COALESCE($3, gender) WHERE email = $4`,
@@ -401,6 +404,7 @@ exports.addAdditionalDetails = async (req, res) => {
     const updatedUserRes = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
     const updatedUser = updatedUserRes.rows[0];
     res.json({
+      status: true,
       message: 'Additional details updated successfully.',
       user: {
         id: updatedUser.id,
@@ -419,7 +423,7 @@ exports.addAdditionalDetails = async (req, res) => {
     });
   } catch (err) {
     console.error('Additional details update error:', err.message);
-    res.status(500).json({ error: 'Internal server error.' });
+    res.status(500).json({ status: false, error: 'Internal server error.' });
   }
 };
 
@@ -497,6 +501,8 @@ exports.login = async (req, res) => {
     }
 
     res.json({
+      status: true,
+      message: 'Login successful.',
       token,
       user: userData
     });
@@ -549,6 +555,7 @@ exports.checkOnboardingCompletion = async (req, res) => {
     const fullUserRes = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
     const user = fullUserRes.rows[0];
     res.json({
+      status: true,
       has_completed_additional_details,
       has_completed_location_accessibility,
       has_completed_ndis_information,
@@ -576,7 +583,7 @@ exports.checkOnboardingCompletion = async (req, res) => {
 // Logout API (stateless)
 exports.logout = (req, res) => {
   // For JWT, logout is handled on the client by deleting the token.
-  res.status(200).json({ message: 'Logged out successfully' });
+  res.status(200).json({status: true, message: 'Logged out successfully' });
 };
 
 
@@ -612,7 +619,7 @@ exports.updateProfile = async (req, res) => {
   try {
     const userRes = await pool.query('SELECT * FROM users WHERE id = $1', [user_id]);
     if (userRes.rows.length === 0) {
-      return res.status(404).json({ error: 'User not found' });
+      return res.status(404).json({ status: false, error: 'User not found' });
     }
 
     const user = userRes.rows[0];
@@ -620,17 +627,17 @@ exports.updateProfile = async (req, res) => {
     // Basic validation
     if (full_name) {
       const nameValidation = validateFullName(full_name);
-      if (!nameValidation.isValid) return res.status(400).json({ error: nameValidation.error });
+      if (!nameValidation.isValid) return res.status(400).json({ status: false, error: nameValidation.error });
     }
 
     if (email) {
       const emailValidation = validateEmail(email);
-      if (!emailValidation.isValid) return res.status(400).json({ error: emailValidation.error });
+      if (!emailValidation.isValid) return res.status(400).json({ status: false, error: emailValidation.error });
     }
 
     if (phone_number) {
       const phoneValidation = validatePhoneNumber(phone_number);
-      if (!phoneValidation.isValid) return res.status(400).json({ error: phoneValidation.error });
+      if (!phoneValidation.isValid) return res.status(400).json({ status: false, error: phoneValidation.error });
     }
 
     const fields = [];
@@ -726,7 +733,7 @@ exports.updateProfile = async (req, res) => {
     }
 
     if (fields.length === 0) {
-      return res.status(400).json({ error: 'No data provided for update.' });
+      return res.status(400).json({ status: false, error: 'No data provided for update.' });
     }
 
     const query = `
@@ -743,7 +750,7 @@ exports.updateProfile = async (req, res) => {
 
   } catch (err) {
     console.error('Profile Update Error:', err.message);
-    res.status(500).json({ error: 'Failed to update profile' });
+    res.status(500).json({ status: false, error: 'Failed to update profile' });
   }
 };
 
@@ -751,7 +758,7 @@ exports.changePassword = async (req, res) => {
   const user_id = req.user?.userId;
   const { current_password, new_password } = req.body;
 
-  if (!user_id) return res.status(401).json({ error: 'Unauthorized' });
+  if (!user_id) return res.status(401).json({ status: false, error: 'Unauthorized' });
   if (!current_password || !new_password) {
     return res.status(400).json({ error: 'Current and new passwords are required.' });
   }
@@ -759,30 +766,30 @@ exports.changePassword = async (req, res) => {
   // Validate new password
   const passwordValidation = validatePassword(new_password);
   if (!passwordValidation.isValid) {
-    return res.status(400).json({ error: passwordValidation.error });
+    return res.status(400).json({ status: false, error: passwordValidation.error });
   }
 
   try {
     // Fetch user by ID
     const userResult = await pool.query('SELECT password FROM users WHERE id = $1', [user_id]);
     if (userResult.rows.length === 0) {
-      return res.status(404).json({ error: 'User not found.' });
+      return res.status(404).json({ status: false, error: 'User not found.' });
     }
 
     const user = userResult.rows[0];
     const isMatch = await bcrypt.compare(current_password, user.password);
     if (!isMatch) {
-      return res.status(400).json({ error: 'Current password is incorrect.' });
+      return res.status(400).json({ status: false, error: 'Current password is incorrect.' });
     }
 
     // Hash and update new password
     const hashedPassword = await bcrypt.hash(new_password, 10);
     await pool.query('UPDATE users SET password = $1, updated_at = NOW() WHERE id = $2', [hashedPassword, user_id]);
 
-    res.json({ message: 'Password changed successfully.', status: true });
+    res.json({  message: 'Password changed successfully.', status: true });
   } catch (err) {
     console.error('Change Password Error:', err.message);
-    res.status(500).json({ error: 'Failed to change password.' });
+    res.status(500).json({ status: false, error: 'Failed to change password.' });
   }
 };
 
@@ -838,6 +845,6 @@ exports.getProfile = async (req, res) => {
     res.json({ status: true, data: user });
   } catch (err) {
     console.error('Get Profile Error:', err.message);
-    res.status(500).json({ error: 'Failed to fetch profile.' });
+    res.status(500).json({ status: false, error: 'Failed to fetch profile.' });
   }
 };

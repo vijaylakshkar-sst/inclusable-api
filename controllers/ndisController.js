@@ -21,13 +21,14 @@ exports.getDropdownValues = async (req, res) => {
     ]);
 
     res.json({
+      status: true,
       event_types: eventTypes.rows.map(row => row.name),
       disability_types: disabilityTypes.rows.map(row => row.name),
       support_requirements: supportRequirements.rows.map(row => row.name)
     });
   } catch (error) {
     console.error('Error fetching dropdown values:', error);
-    res.status(500).json({ error: 'Failed to load dropdown values' });
+    res.status(500).json({ status: false, error: 'Failed to load dropdown values' });
   }
 };
 
@@ -41,10 +42,10 @@ exports.submitNdisInfo = async (req, res) => {
          ON CONFLICT (user_id, step_name) DO NOTHING`,
         [userId, 'ndis_information']
       );
-      return res.json({ message: 'User skipped NDIS information.' });
+      return res.json({ status: true, message: 'User skipped NDIS information.' });
     } catch (err) {
       console.error('Skip NDIS info error:', err.message);
-      return res.status(500).json({ error: 'Internal server error.' });
+      return res.status(500).json({ status: false, error: 'Internal server error.' });
     }
   }
   
@@ -55,13 +56,13 @@ exports.submitNdisInfo = async (req, res) => {
   
   // New comprehensive validation
   if (!ndis_number || !preferred_event_types || !primary_disability_type || !support_requirements) {
-    return res.status(400).json({ error: 'All fields are required.' });
+    return res.status(400).json({ status: false, error: 'All fields are required.' });
   }
   
   // Validate NDIS number
   const ndisValidation = validateNdisNumber(ndis_number);
   if (!ndisValidation.isValid) {
-    return res.status(400).json({ error: ndisValidation.error });
+    return res.status(400).json({ status: false, error: ndisValidation.error });
   }
   
   try {
@@ -82,6 +83,7 @@ exports.submitNdisInfo = async (req, res) => {
     const userRes = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
     const user = userRes.rows[0];
     res.json({
+      status: true,
       message: 'NDIS information saved successfully.',
       user: {
         id: user.id,
@@ -100,6 +102,6 @@ exports.submitNdisInfo = async (req, res) => {
     });
   } catch (err) {
     console.error('NDIS info save error:', err.message);
-    res.status(500).json({ error: 'Internal server error.' });
+    res.status(500).json({ status: false, error: 'Internal server error.' });
   }
 }; 

@@ -28,7 +28,7 @@ exports.createCompanyEvent = async (req, res) => {
 
   const user_id = req.user?.userId; // Auth middleware must set req.user
   if (!user_id) {
-    return res.status(401).json({ error: 'Unauthorized' });
+    return res.status(401).json({ status: false, error: 'Unauthorized' });
   }
 
   try {
@@ -79,7 +79,7 @@ exports.createCompanyEvent = async (req, res) => {
     });
   } catch (err) {
     console.error('Create Event Error:', err.message);
-    res.status(500).json({ error: 'Failed to create event.' });
+    res.status(500).json({ status: false, error: 'Failed to create event.' });
   }
 };
 
@@ -88,11 +88,11 @@ exports.updateCompanyEvent = async (req, res) => {
   const { id } = req.params;
   const user_id = req.user?.userId;
 
-  if (!user_id) return res.status(401).json({ error: 'Unauthorized' });
+  if (!user_id) return res.status(401).json({ status: false, error: 'Unauthorized' });
 
   const validation = eventUpdateSchema.validate(req.body);
   if (validation.error) {
-    return res.status(400).json({ error: validation.error.details[0].message });
+    return res.status(400).json({ status: false, error: validation.error.details[0].message });
   }
 
   try {
@@ -103,7 +103,7 @@ exports.updateCompanyEvent = async (req, res) => {
     );
 
     if (checkEvent.rows.length === 0) {
-      return res.status(404).json({ error: 'Event not found or unauthorized' });
+      return res.status(404).json({ status: false, error: 'Event not found or unauthorized' });
     }
 
     const oldEvent = checkEvent.rows[0];
@@ -178,7 +178,7 @@ exports.updateCompanyEvent = async (req, res) => {
     res.json({ status: true, message: 'Event updated successfully' });
   } catch (err) {
     console.error('Update Event Error:', err.message);
-    res.status(500).json({ error: 'Failed to update event' });
+    res.status(500).json({ status: false, error: 'Failed to update event' });
   }
 };
 
@@ -234,7 +234,7 @@ exports.getCompanyEvents = async (req, res) => {
     res.json({ status: true, data: events });
   } catch (err) {
     console.error('Get Events Error:', err.message);
-    res.status(500).json({ error: 'Failed to fetch events' });
+    res.status(500).json({ status: false, error: 'Failed to fetch events' });
   }
 };
 
@@ -266,7 +266,7 @@ exports.getEventById = async (req, res) => {
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Event not found' });
+      return res.status(404).json({ status: false, error: 'Event not found' });
     }
 
     const event = result.rows[0];
@@ -318,7 +318,7 @@ exports.getEventById = async (req, res) => {
     res.json({ status: true, data: { ...cleanEvent, company } });
   } catch (err) {
     console.error('Get Event By ID Error:', err.message);
-    res.status(500).json({ error: 'Error fetching event' });
+    res.status(500).json({ status: false, error: 'Error fetching event' });
   }
 };
 
@@ -327,7 +327,7 @@ exports.deleteCompanyEvent = async (req, res) => {
   const { id } = req.params;
   const user_id = req.user?.userId;
 
-  if (!user_id) return res.status(401).json({ error: 'Unauthorized' });
+  if (!user_id) return res.status(401).json({ status: false, error: 'Unauthorized' });
 
   try {
     // Check if the event exists and belongs to the user
@@ -337,7 +337,7 @@ exports.deleteCompanyEvent = async (req, res) => {
     );
 
     if (checkEvent.rows.length === 0) {
-      return res.status(400).json({ error: 'Event not found or already deleted' });
+      return res.status(400).json({ status: false, error: 'Event not found or already deleted' });
     }
 
     // Soft delete
@@ -349,7 +349,7 @@ exports.deleteCompanyEvent = async (req, res) => {
     res.json({ status: true, message: 'Event soft-deleted successfully' });
   } catch (err) {
     console.error('Soft Delete Event Error:', err.message);
-    res.status(500).json({ error: 'Failed to delete event' });
+    res.status(500).json({ status: false, error: 'Failed to delete event' });
   }
 };
 
@@ -392,11 +392,11 @@ exports.getBookingsByCompany = async (req, res) => {
 
     res.json({
       status: true,
-      bookings
+      data: bookings
     });
   } catch (err) {
     console.error('Company Bookings Error:', err.message);
-    res.status(500).json({ error: 'Failed to fetch bookings' });
+    res.status(500).json({ status: false, error: 'Failed to fetch bookings' });
   }
 };
 
@@ -440,7 +440,7 @@ exports.getBookingById = async (req, res) => {
     const result = await pool.query(query, [id]);
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ error: 'Booking not found' });
+      return res.status(404).json({ status: false, error: 'Booking not found' });
     }
 
     const booking = result.rows[0];
@@ -457,7 +457,7 @@ exports.getBookingById = async (req, res) => {
 
   } catch (err) {
     console.error('Booking Detail Error:', err.message);
-    res.status(500).json({ error: 'Failed to fetch booking details' });
+    res.status(500).json({ status: false, error: 'Failed to fetch booking details' });
   }
 };
 
@@ -561,7 +561,7 @@ exports.getEvents = async (req, res) => {
     res.json({ status: true, data: events });
   } catch (err) {
     console.error('Get Events Error:', err.message);
-    res.status(500).json({ error: 'Failed to fetch events' });
+    res.status(500).json({ status: false, error: 'Failed to fetch events' });
   }
 };
 
@@ -577,7 +577,7 @@ exports.createEventBooking = async (req, res) => {
   } = req.body;
 
   if (!user_id || !event_id || !company_id || !number_of_tickets || !total_amount) {
-    return res.status(400).json({ error: 'Missing required fields' });
+    return res.status(400).json({ status: false, error: 'Missing required fields' });
   }
 console.log("Inserting booking for event_id:", event_id);
   // Optional: Validate attendee_info length === number_of_tickets
@@ -588,7 +588,7 @@ console.log("Inserting booking for event_id:", event_id);
 );
 
 if (eventCheck.rows.length === 0) {
-  return res.status(400).json({ error: 'Invalid event_id or event does not belong to the specified company.' });
+  return res.status(400).json({ status: false, error: 'Invalid event_id or event does not belong to the specified company.' });
 }
 
   try {
@@ -614,6 +614,6 @@ if (eventCheck.rows.length === 0) {
     res.status(201).json({ status: true, message: 'Booking successful' });
   } catch (err) {
     console.error('Booking Error:', err.message);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ status: false, error: 'Internal server error' });
   }
 };

@@ -52,6 +52,7 @@ exports.semanticSearch = async (req, res) => {
 
   if (!query) {
     return res.status(400).json({
+      status: false,
       error: 'Missing query parameter',
       statusCode: 400
     });
@@ -63,6 +64,7 @@ exports.semanticSearch = async (req, res) => {
 
     if (!embedding) {
       return res.status(500).json({
+        status: false,
         error: 'Embedding generation failed',
         statusCode: 500
       });
@@ -260,8 +262,7 @@ exports.semanticSearch = async (req, res) => {
           queryParams = [toPgVectorString(embedding), `%${query}%`, minLat, maxLat, minLng, maxLng];
         }
       }
-
-      console.log('Executing location query with', queryParams.length, 'parameters');
+     
       result = await pool.query(sqlQuery, queryParams);
 
       // Calculate precise distances and filter
@@ -329,8 +330,7 @@ exports.semanticSearch = async (req, res) => {
       }
 
       sqlQuery += ` ORDER BY has_exact_keywords DESC, similarity ASC LIMIT 50`;
-
-      console.log('Executing non-location query with', queryParams.length, 'parameters');
+      
       result = await pool.query(sqlQuery, queryParams);
       
       // Add null distance for consistency
@@ -342,8 +342,8 @@ exports.semanticSearch = async (req, res) => {
 
   if (result.rows.length === 0) {
   return res.status(404).json({
+    status: false,
     error: 'No similar events found',
-    statusCode: 404
   });
 }
 
@@ -373,6 +373,7 @@ if (hasExactKeywordMatch) {
   // NEW LOGIC: Don't return results if no exact keyword matches found
   console.log(`No exact keyword matches found and semantic similarity not strong enough. No results returned.`);
   return res.status(404).json({
+    status: false,
     error: 'No events found matching your search query',
     statusCode: 404,
     message: 'Try searching with different keywords or check your spelling'
@@ -382,16 +383,17 @@ if (hasExactKeywordMatch) {
 // Only return results if we have meaningful matches
 if (finalResults.length === 0) {
   return res.status(404).json({
+    status: false,
     error: 'No relevant events found for your search',
     statusCode: 404
   });
 }
 
 console.log(`Found ${result.rows.length} total results, returning ${finalResults.length} high-quality matches`);
-res.json(finalResults);
+res.json({status: true, data: finalResults});
 
   } catch (err) {
     console.error('❌ Semantic search error:', err.message); 
-    res.status(500).json({ error: 'Internal Server Error' });
+    res.status(500).json({ status: false, error: 'Internal Server Error' });
   }
 };

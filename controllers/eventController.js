@@ -44,7 +44,7 @@ exports.getCategories = async (req, res) => {
       categories = result.rows.map(row => row.category);
     }
 
-    res.json(categories);
+    res.json({status: true, data:categories});
   } catch (err) {
     console.error('Fetch categories error:', err.message);
     res.status(500).json({ error: 'Internal Server Error' });
@@ -82,10 +82,10 @@ exports.getAllEventsByCategory = async (req, res) => {
     // Only group under the requested category
     const grouped = {};
     grouped[category] = result.rows;
-    res.json(grouped);
+    res.json({status: true, data: grouped});
   } catch (err) {
     console.error('Fetch by category error:', err.message);
-    res.status(500).json({ error: 'Internal Server Error' });
+    res.status(500).json({ status: false, error: 'Internal Server Error' });
   }
 };
 
@@ -135,6 +135,7 @@ exports.getPersonalizedEvents = async (req, res) => {
       });
 
       return res.json({
+        status: true,
         events: grouped,
         personalization: {
           hasPreferences: false,
@@ -204,6 +205,7 @@ exports.getPersonalizedEvents = async (req, res) => {
 
     if (!hasPreferences) {
       return res.json({
+        status: true,
         events: {},
         personalization: {
           hasPreferences: false,
@@ -223,7 +225,7 @@ exports.getPersonalizedEvents = async (req, res) => {
       }
     };
 
-    res.json(response);
+    res.json({ status: true, data:response});
 
   } catch (err) {
     console.error('Personalized events error:', err.message);

@@ -4,12 +4,12 @@ const pool = require('../dbconfig');
 exports.getDropdownValues = async (req, res) => {
   try {
     const accessibilityRes = await pool.query('SELECT name FROM accessibility_requirements');
-    res.json({
+    res.json({status: true,
       accessibility_requirements: accessibilityRes.rows.map(row => row.name)
     });
   } catch (err) {
     console.error('❌ Error fetching accessibility requirements:', err.message);
-    res.status(500).json({ error: 'Failed to load dropdown values' });
+    res.status(500).json({ status: false, error: 'Failed to load dropdown values' });
   }
 };
 
@@ -23,14 +23,14 @@ exports.submitLocationAccessibility = async (req, res) => {
          ON CONFLICT (user_id, step_name) DO NOTHING`,
         [userId, 'location_accessibility']
       );
-      return res.json({ message: 'User skipped location & accessibility.' });
+      return res.json({ status: true, message: 'User skipped location & accessibility.' });
     } catch (err) {
       console.error('Skip location & accessibility error:', err.message);
-      return res.status(500).json({ error: 'Internal server error.' });
+      return res.status(500).json({status: false, error: 'Internal server error.' });
     }
   }
   if (!accessibility_requirements || !residential_address) {
-    return res.status(400).json({ error: 'All fields are required.' });
+    return res.status(400).json({status: false, error: 'All fields are required.' });
   }
   try {
     // Upsert logic: if exists, update; else, insert
@@ -50,6 +50,7 @@ exports.submitLocationAccessibility = async (req, res) => {
     const userRes = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
     const user = userRes.rows[0];
     res.json({
+      status: true,
       message: 'Location & accessibility needs saved successfully.',
       user: {
         id: user.id,
@@ -68,6 +69,6 @@ exports.submitLocationAccessibility = async (req, res) => {
     });
   } catch (err) {
     console.error('Location & accessibility save error:', err.message);
-    res.status(500).json({ error: 'Internal server error.' });
+    res.status(500).json({ status: false, error: 'Internal server error.' });
   }
 }; 
