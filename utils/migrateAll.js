@@ -18,7 +18,12 @@ const migrationFiles = [
   'alterEventBookingNewField.js',
   'createTermsConditionsTable.js',
   'createPrivacyPolicyTable.js',
-  'createTransactionsTable.js'
+  'createTransactionsTable.js',
+  'createCabTypesTable.js',
+  'createCabBookingsTable.js',
+  'createDriversTable.js',
+  'createBookingRoutesTable.js',
+  'createNotificationsTable.js',
 ];
 
 const runMigration = (file) => {
