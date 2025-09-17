@@ -1,5 +1,7 @@
 const pool = require('../../dbconfig');
+const moment = require('moment');
 
+const MONTHLY_TARGET = 1000;
 exports.getCardsCount = async (req, res) => {
   try {
     const query = `
@@ -125,5 +127,67 @@ exports.getMonthlyBookingRevenue = async (req, res) => {
   } catch (err) {
     console.error('Error fetching monthly booking revenue:', err.message);
     res.status(500).json({ status: false, error: 'Internal server error' });
+  }
+};
+
+
+exports.getBookingDashboardStats = async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const today = moment().format('YYYY-MM-DD');
+    const startOfMonth = moment().startOf('month').format('YYYY-MM-DD');
+    const endOfMonth = moment().endOf('month').format('YYYY-MM-DD');
+    const startOfLastMonth = moment().subtract(1, 'months').startOf('month').format('YYYY-MM-DD');
+    const endOfLastMonth = moment().subtract(1, 'months').endOf('month').format('YYYY-MM-DD');
+
+    // 1. Today's bookings
+    const { rows: todayRows } = await client.query(
+      `SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as amount FROM event_bookings WHERE DATE(created_at) = $1`,
+      [today]
+    );
+
+    // 2. This month's bookings
+    const { rows: monthRows } = await client.query(
+      `SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as amount FROM event_bookings WHERE created_at BETWEEN $1 AND $2`,
+      [startOfMonth, endOfMonth]
+    );
+
+    // 3. Last month's bookings (for comparison)
+    const { rows: lastMonthRows } = await client.query(
+      `SELECT COALESCE(SUM(total_amount), 0) as amount FROM event_bookings WHERE created_at BETWEEN $1 AND $2`,
+      [startOfLastMonth, endOfLastMonth]
+    );
+
+    const target = 1000;
+    const todayBookings = parseInt(todayRows[0].count);
+    const todayAmount = parseFloat(todayRows[0].amount);
+    const monthlyBookings = parseInt(monthRows[0].count);
+    const monthlyAmount = parseFloat(monthRows[0].amount);
+    const lastMonthAmount = parseFloat(lastMonthRows[0].amount);
+
+    const percentageAchieved = ((monthlyBookings / target) * 100).toFixed(2);
+
+    const changePercentage = lastMonthAmount > 0
+      ? (((monthlyAmount - lastMonthAmount) / lastMonthAmount) * 100).toFixed(2)
+      : 100;
+
+    return res.json({
+      status: true,
+      data:{target,
+      todayBookings,
+      monthlyBookings,
+      percentageAchieved: Number(percentageAchieved),
+      changePercentage: Number(changePercentage),
+      todayAmount,
+      monthlyAmount,
+      lastMonthAmount
+      }
+    });
+
+  } catch (error) {
+    console.error('Error fetching booking stats:', error.message);
+    res.status(500).json({status: false, message: 'Internal server error' });
+  } finally {
+    client.release();
   }
 };
