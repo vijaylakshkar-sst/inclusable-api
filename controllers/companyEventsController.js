@@ -184,7 +184,7 @@ exports.updateCompanyEvent = async (req, res) => {
 };
 
 exports.getCompanyEvents = async (req, res) => {
-  const { search, type, state, company_id, page = 1, limit = 20 } = req.query;
+  const { search, type, state, company_id, upcoming, page = 1, limit = 20 } = req.query;
 
   let query = `SELECT * FROM company_events WHERE is_deleted = FALSE`;
   const values = [];
@@ -207,6 +207,11 @@ exports.getCompanyEvents = async (req, res) => {
   if (company_id) {
     values.push(company_id);
     query += ` AND user_id = $${values.length}`;
+  }
+
+  if (upcoming === 'true') {
+    values.push(new Date()); // current date-time
+    query += ` AND start_date >= $${values.length}`;
   }
 
   query += ` ORDER BY start_date DESC`;

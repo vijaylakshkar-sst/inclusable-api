@@ -3,9 +3,9 @@ const pool = require('../dbconfig');
 
 exports.getDropdownValues = async (req, res) => {
   try {
-    const accessibilityRes = await pool.query('SELECT name FROM accessibility_requirements');
+    const accessibilityRes = await pool.query('SELECT name,id FROM accessibility_requirements');
     res.json({status: true,
-      accessibility_requirements: accessibilityRes.rows.map(row => row.name)
+      data: accessibilityRes.rows.map(row => ({ id: row.id, value: row.name }))
     });
   } catch (err) {
     console.error('❌ Error fetching accessibility requirements:', err.message);

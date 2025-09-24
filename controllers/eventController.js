@@ -206,13 +206,13 @@ exports.getPersonalizedEvents = async (req, res) => {
     if (!hasPreferences) {
       return res.json({
         status: true,
-        events: {},
+        data:{events: {},
         personalization: {
           hasPreferences: false,
           totalCategories: 0,
           totalEvents: 0,
           message: "Please complete your onboarding to get personalized event recommendations."
-        }
+        }}
       });
     }
 

@@ -37,10 +37,11 @@ const validateFullName = (fullName) => {
 };
 
 const validatePhoneNumber = (phoneNumber) => {
-  // Check for exactly 10 digits
-  const phoneRegex = /^\d{10}$/;
+  // Optional '+' at start, followed by 1 to 15 digits
+  const phoneRegex = /^\+?\d{1,15}$/;
+  
   if (!phoneRegex.test(phoneNumber)) {
-    return { isValid: false, error: 'Phone number must be exactly 10 digits.' };
+    return { isValid: false, error: 'Phone number must be up to 15 digits and may start with a +.' };
   }
   
   return { isValid: true };
@@ -120,68 +121,6 @@ exports.upload = multer({
   limits: { fileSize: 5 * 1024 * 1024 } // optional: 5MB limit
 });
 
-// exports.register = async (req, res) => {
-//   const { full_name, email, password, phone_number, role } = req.body;
-  
-//   // New comprehensive validation
-//   if (!full_name || !email || !password || !phone_number || !role) {
-//     return res.status(400).json({ error: 'All fields are required.' });
-//   }
-  
-//   // Validate full name
-//   const fullNameValidation = validateFullName(full_name);
-//   if (!fullNameValidation.isValid) {
-//     return res.status(400).json({ error: fullNameValidation.error });
-//   }
-  
-//   // Validate email
-//   const emailValidation = validateEmail(email);
-//   if (!emailValidation.isValid) {
-//     return res.status(400).json({ error: emailValidation.error });
-//   }
-  
-//   // Validate password
-//   const passwordValidation = validatePassword(password);
-//   if (!passwordValidation.isValid) {
-//     return res.status(400).json({ error: passwordValidation.error });
-//   }
-  
-//   // Validate phone number
-//   const phoneValidation = validatePhoneNumber(phone_number);
-//   if (!phoneValidation.isValid) {
-//     return res.status(400).json({ error: phoneValidation.error });
-//   }
-//   try {
-//     // Check if email exists
-//     const existing = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
-//     if (existing.rows.length > 0) {
-//       return res.status(409).json({ error: 'Email already registered.' });
-//     }
-//     // Hash password
-//     const hashedPassword = await bcrypt.hash(password, 10);
-//     // Use default verification code
-//     const verification_code = '1234';
-//     // Insert user
-//     await pool.query(
-//       `INSERT INTO users (full_name, email, password, phone_number, role, verification_code) VALUES ($1, $2, $3, $4, $5, $6)`,
-//       [full_name, email, hashedPassword, phone_number, role, verification_code]
-//     );
-//     // Commented out email sending for now
-//     // await transporter.sendMail({
-//     //   from: EMAIL_FROM,
-//     //   to: email,
-//     //   subject: 'Verify your email',
-//     //   text: `Your verification code is: ${verification_code}`,
-//     //   html: `<p>Your verification code is: <b>${verification_code}</b></p>`
-//     // });
-//     res.status(200).json({ message: 'Registration successful. Please verify your email.', verification_code });
-//   } catch (err) {
-//     console.error('Registration error:', err.message);
-//     res.status(500).json({ error: 'Internal server error.' });
-//   }
-// };
-
-
 exports.register = async (req, res) => {
   const {
     full_name,
@@ -189,20 +128,7 @@ exports.register = async (req, res) => {
     password,
     phone_number,
     role, // either "NDIS Member" or "Company"
-    business_name,
-    business_category,
-    business_email,
-    business_phone_number,
-    abn_number,
-    ndis_registration_number,
-    website_url,
-    year_experience,
-    address,
-    business_overview
   } = req.body;
-
-  // File comes from multer (e.g., 'business_logo')
-  const business_logo = req.file ? req.file.filename : null;
 
   // Basic validation
   if (!full_name || !email || !password || !phone_number || !role) {
@@ -222,65 +148,38 @@ exports.register = async (req, res) => {
   if (!phoneValidation.isValid) return res.status(400).json({ error: phoneValidation.error });
 
   try {
-    const existing = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
+   const existing = await pool.query(
+      'SELECT id, is_verified FROM users WHERE email = $1',
+      [email]
+    );
+
     if (existing.rows.length > 0) {
-      return res.status(409).json({ error: 'Email already registered.' });
+      if (existing.rows[0].is_verified) {
+        // Email already verified
+        return res.status(400).json({ error: 'Email already registered and verified.' });
+      } else {
+        // Email exists but not verified → delete old record
+        await pool.query('DELETE FROM users WHERE id = $1', [existing.rows[0].id]);
+      }
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
     const verification_code = '1234';
 
-    let query = `
+    const query = `
       INSERT INTO users (
         full_name, email, password, phone_number, role, verification_code
+      ) VALUES ($1, $2, $3, $4, $5, $6)
     `;
 
-    let values = [
-      full_name, email, hashedPassword, phone_number, role, verification_code
-    ];
-
-    if (role === 'Company') {
-      query += `,
-        business_name,
-        business_category,
-        business_email,
-        business_phone_number,
-        business_logo,
-        abn_number,
-        ndis_registration_number,
-        website_url,
-        year_experience,
-        address,
-        business_overview
-      ) VALUES (
-        $1, $2, $3, $4, $5, $6,
-        $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
-      )`;
-
-      values = values.concat([
-        business_name || null,
-        business_category || null,
-        business_email || null,
-        business_phone_number || null,
-        business_logo || null, // filename from req.file
-        abn_number || null,
-        ndis_registration_number || null,
-        website_url || null,
-        year_experience || null,
-        address || null,
-        business_overview || null
-      ]);
-    } else {
-      // NDIS Member
-      query += `) VALUES ($1, $2, $3, $4, $5, $6)`;
-    }
+    const values = [full_name, email, hashedPassword, phone_number, role, verification_code];
 
     await pool.query(query, values);
 
     res.status(200).json({
       status: true,
       message: `Registration successful as ${role}. Please verify your email.`,
-      verification_code
+      data:verification_code
     });
 
   } catch (err) {
@@ -289,21 +188,94 @@ exports.register = async (req, res) => {
   }
 };
 
+exports.updateBusinessDetails = async (req, res) => {
+
+  const user_id = req.user.userId;
+  const {    
+    business_name,
+    business_category,
+    business_email,
+    business_phone_number,
+    abn_number,
+    ndis_registration_number,
+    website_url,
+    year_experience,
+    address,
+    business_overview
+  } = req.body;
+
+  // File from multer
+  const business_logo = req.file ? req.file.filename : null;
+
+  if (!user_id) return res.status(400).json({ error: 'User ID is required.' });
+
+  try {
+    // Check if user exists and is a company
+    const userCheck = await pool.query('SELECT role FROM users WHERE id = $1', [user_id]);
+    if (userCheck.rows.length === 0) return res.status(404).json({ error: 'User not found.' });
+    if (userCheck.rows[0].role !== 'Company') return res.status(400).json({ error: 'Only companies can update business details.' });
+
+    // Update query
+    const query = `
+      UPDATE users SET
+        business_name = $1,
+        business_category = $2,
+        business_email = $3,
+        business_phone_number = $4,
+        business_logo = $5,
+        abn_number = $6,
+        ndis_registration_number = $7,
+        website_url = $8,
+        year_experience = $9,
+        address = $10,
+        business_overview = $11
+      WHERE id = $12
+    `;
+
+    const values = [
+      business_name || null,
+      business_category || null,
+      business_email || null,
+      business_phone_number || null,
+      business_logo || null,
+      abn_number || null,
+      ndis_registration_number || null,
+      website_url || null,
+      year_experience || null,
+      address || null,
+      business_overview || null,
+      user_id
+    ];
+
+    await pool.query(query, values);
+
+    res.status(200).json({
+      status: true,
+      message: 'Business details updated successfully.'
+    });
+
+  } catch (err) {
+    console.error('Business update error:', err.message);
+    res.status(500).json({ error: 'Internal server error.' });
+  }
+};
+
 exports.verifyEmail = async (req, res) => {
-  const { email, code } = req.body;
+  const { email, code, type } = req.body;
   if (!email || !code) {
     return res.status(400).json({ error: 'Email and code are required.' });
   }
   try {
+    
     const userRes = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
     if (userRes.rows.length === 0) {
       return res.status(404).json({ error: 'User not found.' });
     }
     const user = userRes.rows[0];
-    if (user.is_verified) {
+    if (user.is_verified && type === 'register') {
       return res.status(400).json({ error: 'Email already verified.' });
     }
-    if (user.verification_code !== code) {
+    if (user.verification_code !== code && type === 'register') {
       return res.status(400).json({ error: 'Invalid verification code.' });
     }
     await pool.query('UPDATE users SET is_verified = TRUE, verification_code = NULL WHERE id = $1', [user.id]);
@@ -446,11 +418,11 @@ exports.login = async (req, res) => {
     return res.status(400).json({ error: 'Password is required.' });
   }
   try {
-    const userRes = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
-    if (userRes.rows.length === 0) {
+    const userResData = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+    if (userResData.rows.length === 0) {
       return res.status(404).json({ error: 'User not found.' });
     }
-    const user = userRes.rows[0];
+    const user = userResData.rows[0];
     if (!user.is_verified) {
       return res.status(403).json({ error: 'Email not verified.' });
     }
@@ -462,6 +434,61 @@ exports.login = async (req, res) => {
     const token = jwt.sign({ userId: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
     // res.json({ token });
 
+    const userId = user.id;
+
+    // Check skips
+    const skipRes = await pool.query(
+      'SELECT step_name FROM user_onboarding_skips WHERE user_id = $1',
+      [userId]
+    );
+    const skipped = skipRes.rows.map(r => r.step_name);
+
+    // Check additional details (profile_image, date_of_birth, gender)
+    const userRes = await pool.query(
+      'SELECT profile_image, date_of_birth, gender FROM users WHERE id = $1',
+      [userId]
+    );
+    let has_completed_additional_details = false;
+    if (userRes.rows.length > 0) {
+      const user = userRes.rows[0];
+      has_completed_additional_details = !!(user.profile_image && user.date_of_birth && user.gender);
+    }
+    if (skipped.includes('additional_details')) has_completed_additional_details = true;
+
+    // Check location & accessibility
+    const locRes = await pool.query(
+      'SELECT id FROM location_accessibility WHERE user_id = $1',
+      [userId]
+    );
+    let has_completed_location_accessibility = locRes.rows.length > 0;
+    if (skipped.includes('location_accessibility')) has_completed_location_accessibility = true;
+
+    // Check NDIS information
+    const ndisRes = await pool.query(
+      'SELECT id FROM ndis_information WHERE user_id = $1',
+      [userId]
+    );
+    let has_completed_ndis_information = ndisRes.rows.length > 0;
+    if (skipped.includes('ndis_information')) has_completed_ndis_information = true;
+
+
+    const businessRes = await pool.query(
+      'SELECT business_name, business_category, business_email, business_phone_number, abn_number,year_experience FROM users WHERE id = $1',
+      [userId]
+    );
+    let has_completed_business_details = false;
+    if (businessRes.rows.length > 0) {
+      const user = businessRes.rows[0];
+      has_completed_business_details = !!(user.business_name && user.business_category && user.business_email && user.business_phone_number && user.abn_number && user.year_experience);
+    }
+    if (skipped.includes('business_details')) has_completed_business_details = true;
+    
+    const skipData = {
+        has_completed_additional_details,
+        has_completed_location_accessibility,
+        has_completed_ndis_information,
+        has_completed_business_details,
+    }
 
     // Base user object
     const userData = {
@@ -504,7 +531,8 @@ exports.login = async (req, res) => {
       status: true,
       message: 'Login successful.',
       token,
-      user: userData
+      data: {skipData,user:userData} ,
+      
     });
   } catch (err) {
     console.error('Login error:', err.message);
@@ -551,27 +579,44 @@ exports.checkOnboardingCompletion = async (req, res) => {
     let has_completed_ndis_information = ndisRes.rows.length > 0;
     if (skipped.includes('ndis_information')) has_completed_ndis_information = true;
 
+
+    const businessRes = await pool.query(
+      'SELECT business_name, business_category, business_email, business_phone_number, abn_number,year_experience FROM users WHERE id = $1',
+      [userId]
+    );
+    let has_completed_business_details = false;
+    if (businessRes.rows.length > 0) {
+      const user = businessRes.rows[0];
+      has_completed_business_details = !!(user.business_name && user.business_category && user.business_email && user.business_phone_number && user.abn_number && user.year_experience);
+    }
+    if (skipped.includes('business_details')) has_completed_business_details = true;
+
+
+
     // Fetch full user details
     const fullUserRes = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
     const user = fullUserRes.rows[0];
     res.json({
       status: true,
-      has_completed_additional_details,
-      has_completed_location_accessibility,
-      has_completed_ndis_information,
-      user: {
-        id: user.id,
-        full_name: user.full_name,
-        email: user.email,
-        phone_number: user.phone_number,
-        role: user.role,
-        is_verified: user.is_verified,
-        profile_image_url: user.profile_image ? `${BASE_IMAGE_URL}/${user.profile_image}` : null,
-        profile_image: user.profile_image,
-        date_of_birth: user.date_of_birth,
-        gender: user.gender,
-        created_at: user.created_at,
-        updated_at: user.updated_at
+      data:{
+        has_completed_additional_details,
+        has_completed_location_accessibility,
+        has_completed_ndis_information,
+        has_completed_business_details,
+        user: {
+          id: user.id,
+          full_name: user.full_name,
+          email: user.email,
+          phone_number: user.phone_number,
+          role: user.role,
+          is_verified: user.is_verified,
+          profile_image_url: user.profile_image ? `${BASE_IMAGE_URL}/${user.profile_image}` : null,
+          profile_image: user.profile_image,
+          date_of_birth: user.date_of_birth,
+          gender: user.gender,
+          created_at: user.created_at,
+          updated_at: user.updated_at
+        }
       }
     });
   } catch (err) {

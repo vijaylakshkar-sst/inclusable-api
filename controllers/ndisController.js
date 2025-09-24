@@ -15,16 +15,18 @@ const validateNdisNumber = (ndisNumber) => {
 exports.getDropdownValues = async (req, res) => {
   try {
     const [eventTypes, disabilityTypes, supportRequirements] = await Promise.all([
-      pool.query('SELECT name FROM event_types'),
-      pool.query('SELECT name FROM disability_types'),
-      pool.query('SELECT name FROM support_requirements'),
+      pool.query('SELECT id, name FROM event_types'),
+      pool.query('SELECT id, name FROM disability_types'),
+      pool.query('SELECT id, name FROM support_requirements'),
     ]);
 
     res.json({
       status: true,
-      event_types: eventTypes.rows.map(row => row.name),
-      disability_types: disabilityTypes.rows.map(row => row.name),
-      support_requirements: supportRequirements.rows.map(row => row.name)
+      data:{
+        event_types: eventTypes.rows.map(row => ({ id: row.id, value: row.name })),
+        disability_types: disabilityTypes.rows.map(row => ({ id: row.id, value: row.name })),
+        support_requirements: supportRequirements.rows.map(row => ({ id: row.id, value: row.name }))
+      }
     });
   } catch (error) {
     console.error('Error fetching dropdown values:', error);

@@ -3,8 +3,8 @@
 const app = require('./app');
 
 const PORT = process.env.PORT || 4000;
-// const HOST = '10.8.21.182';
-const HOST = 'localhost';
+const HOST = '192.168.29.194';
+// const HOST = 'localhost';
 
 
 app.listen(PORT, HOST, () => {
