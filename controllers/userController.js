@@ -657,11 +657,8 @@ exports.updateProfile = async (req, res) => {
     business_overview
   } = req.body;
 
-  // Optional file uploads
-  const profile_image = req.files?.['profile_image']?.[0]?.filename || null;
-  const business_logo = req.files?.['business_logo']?.[0]?.filename || null;
-
   try {
+    // Fetch existing user
     const userRes = await pool.query('SELECT * FROM users WHERE id = $1', [user_id]);
     if (userRes.rows.length === 0) {
       return res.status(404).json({ status: false, error: 'User not found' });
@@ -669,7 +666,7 @@ exports.updateProfile = async (req, res) => {
 
     const user = userRes.rows[0];
 
-    // Basic validation
+    // Validate inputs
     if (full_name) {
       const nameValidation = validateFullName(full_name);
       if (!nameValidation.isValid) return res.status(400).json({ status: false, error: nameValidation.error });
@@ -685,11 +682,25 @@ exports.updateProfile = async (req, res) => {
       if (!phoneValidation.isValid) return res.status(400).json({ status: false, error: phoneValidation.error });
     }
 
+    // Handle optional file uploads (use existing if not provided)
+    let profile_image = user.profile_image;
+    let business_logo = user.business_logo;
+
+    if (req.files) {
+      if (req.files['profile_image'] && req.files['profile_image'][0]) {
+        profile_image = req.files['profile_image'][0].filename;
+      }
+
+      if (req.files['business_logo'] && req.files['business_logo'][0]) {
+        business_logo = req.files['business_logo'][0].filename;
+      }
+    }
+
+    // Build update fields
     const fields = [];
     const values = [];
     let index = 1;
 
-    // General fields
     if (full_name) {
       fields.push(`full_name = $${index++}`);
       values.push(full_name);
@@ -781,6 +792,7 @@ exports.updateProfile = async (req, res) => {
       return res.status(400).json({ status: false, error: 'No data provided for update.' });
     }
 
+    // Append updated_at and user_id to the query
     const query = `
       UPDATE users
       SET ${fields.join(', ')}, updated_at = NOW()
@@ -876,11 +888,20 @@ exports.getProfile = async (req, res) => {
       return res.status(404).json({ error: 'User not found.' });
     }
 
+    console.log(result.rows[0]);
+    
+
     const user = result.rows[0];
+
+    user.date_of_birth = user.date_of_birth
+    ? new Date(user.date_of_birth.getTime() + 5.5 * 60 * 60 * 1000) // adjust for your timezone
+        .toISOString()
+        .split('T')[0]
+    : null;
 
     // Attach full image URLs if available
     user.profile_image_url = user.profile_image
-      ? `${BASE_IMAGE_URL}//${user.profile_image}`
+      ? `${BASE_IMAGE_URL}/${user.profile_image}`
       : null;
 
     user.business_logo_url = user.business_logo

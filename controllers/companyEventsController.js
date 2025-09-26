@@ -3,6 +3,7 @@ const { eventCreateSchema, eventUpdateSchema } = require('../validators/companyE
 const stripe = require('../stripe');
 const BASE_EVENT_IMAGE_URL = process.env.BASE_EVENT_IMAGE_URL;
 const BASE_IMAGE_URL = process.env.BASE_IMAGE_URL;
+
 exports.createCompanyEvent = async (req, res) => {
 
   const validation = eventCreateSchema.validate(req.body);
@@ -32,9 +33,11 @@ exports.createCompanyEvent = async (req, res) => {
     return res.status(401).json({ status: false, error: 'Unauthorized' });
   }
 
-  try {
-    const thumbnail = req.files['event_thumbnail']?.[0]?.filename || null;
+  const thumbnail = req.files['event_thumbnail']?.[0]?.filename || null;
     const eventImages = req.files['event_images']?.map(file => file.filename) || [];
+
+  try {
+    
 
     const query = `
       INSERT INTO company_events (
@@ -186,6 +189,14 @@ exports.updateCompanyEvent = async (req, res) => {
 exports.getCompanyEvents = async (req, res) => {
   const { search, type, state, company_id, upcoming, page = 1, limit = 20 } = req.query;
 
+  const parsedLimit = parseInt(limit, 10);
+  const parsedPage = parseInt(page, 10);
+
+  // Fallbacks
+  const safeLimit = !isNaN(parsedLimit) && parsedLimit > 0 ? parsedLimit : 20;
+  const safePage = !isNaN(parsedPage) && parsedPage > 0 ? parsedPage : 1;
+  const offset = (safePage - 1) * safeLimit;
+
   let query = `SELECT * FROM company_events WHERE is_deleted = FALSE`;
   const values = [];
 
@@ -204,9 +215,12 @@ exports.getCompanyEvents = async (req, res) => {
     query += ` AND event_address ILIKE $${values.length}`;
   }
 
-  if (company_id) {
-    values.push(company_id);
-    query += ` AND user_id = $${values.length}`;
+  if (company_id && company_id !== '') {
+    const parsedCompanyId = parseInt(company_id, 10);
+    if (!isNaN(parsedCompanyId)) {
+      values.push(parsedCompanyId);
+      query += ` AND user_id = $${values.length}`;
+    }
   }
 
   if (upcoming === 'true') {
@@ -214,13 +228,13 @@ exports.getCompanyEvents = async (req, res) => {
     query += ` AND start_date >= $${values.length}`;
   }
 
-  query += ` ORDER BY start_date DESC`;
+  query += ` ORDER BY start_date ASC`;
 
   // Pagination
-  const offset = (page - 1) * limit;
-  values.push(limit);
-  values.push(offset);
-  query += ` LIMIT $${values.length - 1} OFFSET $${values.length}`;
+  // const offset = (page - 1) * limit;
+  values.push(safeLimit);  // LIMIT
+  values.push(offset); 
+  query += ` LIMIT $${values.length - 1} OFFSET $${values.length}`; 
 
   try {
     const result = await pool.query(query, values);
@@ -244,10 +258,12 @@ exports.getCompanyEvents = async (req, res) => {
   }
 };
 
+
 exports.getEventById = async (req, res) => {
   const { id } = req.params;
 
   try {
+    // Fetch event and company details
     const result = await pool.query(
       `
       SELECT 
@@ -277,7 +293,7 @@ exports.getEventById = async (req, res) => {
 
     const event = result.rows[0];
 
-    // Format image URLs
+    // Format images
     event.event_thumbnail = event.event_thumbnail
       ? `${BASE_EVENT_IMAGE_URL}/${event.event_thumbnail}`
       : null;
@@ -286,7 +302,7 @@ exports.getEventById = async (req, res) => {
       ? event.event_images.map(img => `${BASE_EVENT_IMAGE_URL}/${img}`)
       : [];
 
-    // Business details as nested object
+    // Business object
     const company = {
       id: event.company_id,
       business_name: event.business_name,
@@ -301,10 +317,10 @@ exports.getEventById = async (req, res) => {
       website_url: event.website_url,
       year_experience: event.year_experience,
       address: event.business_address,
-      business_overview: event.business_overview
+      business_overview: event.business_overview,
     };
 
-    // Remove business fields from the top-level response
+    // Remove business fields from event object
     const {
       company_id,
       business_name,
@@ -321,7 +337,44 @@ exports.getEventById = async (req, res) => {
       ...cleanEvent
     } = event;
 
-    res.json({ status: true, data: { ...cleanEvent, company } });
+    // --- New: fetch total bookings and latest 4 booked users ---
+    const bookingsResult = await pool.query(
+      `
+      SELECT eb.id, eb.user_id, u.full_name, u.email, u.phone_number, eb.number_of_tickets, eb.total_amount, u.profile_image
+      FROM event_bookings eb
+      JOIN users u ON eb.user_id = u.id
+      WHERE eb.event_id = $1
+      ORDER BY eb.created_at DESC
+      LIMIT 4
+      `,
+      [id]
+    );
+
+    const totalBookingsResult = await pool.query(
+      `
+      SELECT COUNT(*) AS total_bookings
+      FROM event_bookings
+      WHERE event_id = $1
+      `,
+      [id]
+    );
+
+    const totalBookings = parseInt(totalBookingsResult.rows[0].total_bookings, 10);
+    const latestBookings = bookingsResult.rows.map(user => ({
+      ...user,
+      profile_image_url: user.profile_image ? `${BASE_IMAGE_URL}/${user.profile_image}` : null,
+    }));
+
+    
+    res.json({
+      status: true,
+      data: {
+        ...cleanEvent,
+        company,
+        total_bookings: totalBookings,
+        latest_bookings: latestBookings,
+      },
+    });
   } catch (err) {
     console.error('Get Event By ID Error:', err.message);
     res.status(500).json({ status: false, error: 'Error fetching event' });
@@ -472,8 +525,12 @@ exports.getBookingById = async (req, res) => {
 exports.getEvents = async (req, res) => {
   const { search, type, state, page = 1, limit = 20 } = req.query;
 
-  const limitNum = parseInt(limit);
-  const offset = (parseInt(page) - 1) * limitNum;
+  const parsedLimit = parseInt(limit, 10);
+  const parsedPage = parseInt(page, 10);
+  // Fallbacks
+  const safeLimit = !isNaN(parsedLimit) && parsedLimit > 0 ? parsedLimit : 20;
+  const safePage = !isNaN(parsedPage) && parsedPage > 0 ? parsedPage : 1;
+  const offset = (safePage - 1) * safeLimit;
 
   const values = [];
   let query = `
@@ -513,8 +570,8 @@ exports.getEvents = async (req, res) => {
 
   query += ` ORDER BY e.start_date DESC`;
 
-  values.push(limitNum);
-  values.push(offset);
+   values.push(safeLimit);  // LIMIT
+  values.push(offset); 
   query += ` LIMIT $${values.length - 1} OFFSET $${values.length}`;
 
   try {
