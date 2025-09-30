@@ -529,7 +529,7 @@ exports.getBookingById = async (req, res) => {
 
 
 exports.getEvents = async (req, res) => {
-  let { search, type, location, price_type, accessibility_type, page = 1, limit = 20 } = req.body;
+  let { search, type, location, price_type, accessibility_type, page = 1, limit = 20 } = req.body || {};
 
   const parsedLimit = parseInt(limit, 10);
   const parsedPage = parseInt(page, 10);

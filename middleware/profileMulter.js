@@ -29,28 +29,13 @@ const fileFilter = function (req, file, cb) {
 const upload = multer({
   storage: storage,
   fileFilter: fileFilter,
-  limits: { fileSize: 5 * 1024 * 1024 } // 5MB
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
 });
 
-// Middleware to handle errors and multiple fields
-const uploadFiles = (req, res, next) => {
-  const uploadFields = upload.fields([
-    { name: 'profile_image', maxCount: 1 },
-    { name: 'business_logo', maxCount: 1 }
-  ]);
+// Middleware to handle multiple fields
+const uploadFiles = upload.fields([
+  { name: 'profile_image', maxCount: 1 },
+  { name: 'business_logo', maxCount: 1 },
+]);
 
-  uploadFields(req, res, (err) => {
-    if (err) {
-      if (err.code === 'LIMIT_FILE_TYPES') {
-        return res.status(400).json({ status: false, error: err.message });
-      } else if (err.code === 'LIMIT_FILE_SIZE') {
-        return res.status(400).json({ status: false, error: 'File size should be less than 5MB' });
-      } else {
-        return res.status(500).json({ status: false, error: err.message });
-      }
-    }
-    next();
-  });
-};
-
-module.exports = { uploadFiles };
+module.exports = uploadFiles;

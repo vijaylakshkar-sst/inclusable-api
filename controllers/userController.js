@@ -696,6 +696,10 @@ exports.updateProfile = async (req, res) => {
       }
     }
 
+    console.log(profile_image);
+    console.log(req.files);
+    
+    
     // Build update fields
     const fields = [];
     const values = [];
@@ -791,6 +795,9 @@ exports.updateProfile = async (req, res) => {
     if (fields.length === 0) {
       return res.status(400).json({ status: false, error: 'No data provided for update.' });
     }
+console.log(fields);
+console.log(values);
+
 
     // Append updated_at and user_id to the query
     const query = `
@@ -856,59 +863,90 @@ exports.getProfile = async (req, res) => {
   if (!user_id) return res.status(401).json({ error: 'Unauthorized' });
 
   try {
-    const result = await pool.query(`SELECT 
-      id,
-      full_name,
-      email,
-      phone_number,
-      role,
-      profile_image,
-      date_of_birth,
-      gender,
-      is_verified,
-      created_at,
-      updated_at,
-      
-      -- Company-specific fields
-      business_name,
-      business_category,
-      business_email,
-      business_phone_number,
-      business_logo,
-      abn_number,
-      ndis_registration_number,
-      website_url,
-      year_experience,
-      address,
-      business_overview
-      
-    FROM users WHERE id = $1`, [user_id]);
+    const result = await pool.query(
+      `SELECT 
+        id,
+        full_name,
+        email,
+        phone_number,
+        role,
+        profile_image,
+        date_of_birth,
+        gender,
+        is_verified,
+        created_at,
+        updated_at,
+        business_name,
+        business_category,
+        business_email,
+        business_phone_number,
+        business_logo,
+        abn_number,
+        ndis_registration_number,
+        website_url,
+        year_experience,
+        address,
+        business_overview
+      FROM users 
+      WHERE id = $1`,
+      [user_id]
+    );
 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'User not found.' });
     }
 
-    console.log(result.rows[0]);
-    
-
     const user = result.rows[0];
 
+    // Format date_of_birth
     user.date_of_birth = user.date_of_birth
-    ? new Date(user.date_of_birth.getTime() + 5.5 * 60 * 60 * 1000) // adjust for your timezone
-        .toISOString()
-        .split('T')[0]
-    : null;
+      ? new Date(user.date_of_birth.getTime() + 5.5 * 60 * 60 * 1000) // adjust for timezone
+          .toISOString()
+          .split('T')[0]
+      : null;
 
-    // Attach full image URLs if available
+    // Attach profile image URL if exists
     user.profile_image_url = user.profile_image
       ? `${BASE_IMAGE_URL}/${user.profile_image}`
       : null;
 
-    user.business_logo_url = user.business_logo
-      ? `${BASE_IMAGE_URL}/${user.business_logo}`
-      : null;
+    // Only include company fields if role is Company
+    let companyDetails = null;
+    if (user.role === 'Company') {
+      companyDetails = {
+        business_name: user.business_name,
+        business_category: user.business_category,
+        business_email: user.business_email,
+        business_phone_number: user.business_phone_number,
+        business_logo_url: user.business_logo
+          ? `${BASE_IMAGE_URL}/${user.business_logo}`
+          : null,
+        abn_number: user.abn_number,
+        ndis_registration_number: user.ndis_registration_number,
+        website_url: user.website_url,
+        year_experience: user.year_experience,
+        address: user.address,
+        business_overview: user.business_overview,
+      };
+    }
 
-    res.json({ status: true, data: user });
+    // Prepare final response
+    const response = {
+      id: user.id,
+      full_name: user.full_name,
+      email: user.email,
+      phone_number: user.phone_number,
+      role: user.role,
+      profile_image_url: user.profile_image_url,
+      date_of_birth: user.date_of_birth,
+      gender: user.gender,
+      is_verified: user.is_verified,
+      created_at: user.created_at,
+      updated_at: user.updated_at,
+      business_details: companyDetails, // null if not Company
+    };
+
+    res.json({ status: true, data: response });
   } catch (err) {
     console.error('Get Profile Error:', err.message);
     res.status(500).json({ status: false, error: 'Failed to fetch profile.' });
