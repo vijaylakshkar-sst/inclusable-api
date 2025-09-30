@@ -357,7 +357,8 @@ const isVeryExactSemantic = bestSimilarity < 0.05;
 if (hasExactKeywordMatch) {
   console.log(`Exact keyword match found. Prioritizing keyword matches.`);
   const keywordMatches = result.rows.filter(row => row.has_exact_keywords);
-  finalResults = keywordMatches.slice(0, 3);
+  //finalResults = keywordMatches.slice(0, 3);
+  finalResults = keywordMatches;
   
   if (finalResults.length < 5 && isVeryExactSemantic) {
     const additionalResults = result.rows
@@ -368,7 +369,7 @@ if (hasExactKeywordMatch) {
 } else if (isVeryExactSemantic) {
   console.log(`Exact semantic match detected (similarity: ${bestSimilarity}). Showing only exact matches.`);
   finalResults = result.rows.filter(row => row.similarity < 0.08);
-  finalResults = finalResults.slice(0, 5);
+  // finalResults = finalResults.slice(0, 5);
 } else {
   // NEW LOGIC: Don't return results if no exact keyword matches found
   console.log(`No exact keyword matches found and semantic similarity not strong enough. No results returned.`);

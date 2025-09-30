@@ -32,7 +32,7 @@ router.get('/company-events-bookings', auth, companyEventsController.getBookings
 router.get('/company-events-bookings/:id', auth, companyEventsController.getBookingById);
 
 
-router.get('/partner-events',  companyEventsController.getEvents);
+router.post('/partner-events',  companyEventsController.getEvents);
 router.get('/partner-events/:id', companyEventsController.getEventById); // details
 router.post('/events/book', auth, companyEventsController.createEventBooking);
 

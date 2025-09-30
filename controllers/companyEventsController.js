@@ -187,6 +187,7 @@ exports.updateCompanyEvent = async (req, res) => {
 };
 
 exports.getCompanyEvents = async (req, res) => {
+  const user_id = req.user?.userId;
   const { search, type, state, company_id, upcoming, page = 1, limit = 20 } = req.query;
 
   const parsedLimit = parseInt(limit, 10);
@@ -215,12 +216,17 @@ exports.getCompanyEvents = async (req, res) => {
     query += ` AND event_address ILIKE $${values.length}`;
   }
 
-  if (company_id && company_id !== '') {
-    const parsedCompanyId = parseInt(company_id, 10);
-    if (!isNaN(parsedCompanyId)) {
-      values.push(parsedCompanyId);
-      query += ` AND user_id = $${values.length}`;
-    }
+  // if (company_id && company_id !== '') {
+  //   const parsedCompanyId = parseInt(company_id, 10);
+  //   if (!isNaN(parsedCompanyId)) {
+  //     values.push(parsedCompanyId);
+  //     query += ` AND user_id = $${values.length}`;
+  //   }
+  // }
+
+  if (user_id) {
+    values.push(user_id);
+    query += ` AND user_id = $${values.length}`;
   }
 
   if (upcoming === 'true') {
@@ -523,11 +529,10 @@ exports.getBookingById = async (req, res) => {
 
 
 exports.getEvents = async (req, res) => {
-  const { search, type, state, page = 1, limit = 20 } = req.query;
+  let { search, type, location, price_type, accessibility_type, page = 1, limit = 20 } = req.body;
 
   const parsedLimit = parseInt(limit, 10);
   const parsedPage = parseInt(page, 10);
-  // Fallbacks
   const safeLimit = !isNaN(parsedLimit) && parsedLimit > 0 ? parsedLimit : 20;
   const safePage = !isNaN(parsedPage) && parsedPage > 0 ? parsedPage : 1;
   const offset = (safePage - 1) * safeLimit;
@@ -558,20 +563,33 @@ exports.getEvents = async (req, res) => {
     query += ` AND e.event_name ILIKE $${values.length}`;
   }
 
+  // Convert to array if comma-separated string
   if (type) {
-    values.push(type);
-    query += ` AND $${values.length} = ANY(e.event_types)`;
+    const types = Array.isArray(type) ? type : type.split(',');
+    values.push(types);
+    query += ` AND e.event_types && $${values.length}::text[]`;
   }
 
-  if (state) {
-    values.push(`%${state}%`);
+  if (location) {
+    values.push(`%${location}%`);
     query += ` AND e.event_address ILIKE $${values.length}`;
+  }
+
+  if (price_type) {
+    values.push(price_type);
+    query += ` AND e.price_type = $${values.length}`;
+  }
+
+  if (accessibility_type) {
+    const accessTypes = Array.isArray(accessibility_type) ? accessibility_type : accessibility_type.split(',');
+    values.push(accessTypes);
+    query += ` AND e.accessibility_types && $${values.length}::text[]`;
   }
 
   query += ` ORDER BY e.start_date DESC`;
 
-   values.push(safeLimit);  // LIMIT
-  values.push(offset); 
+  values.push(safeLimit);
+  values.push(offset);
   query += ` LIMIT $${values.length - 1} OFFSET $${values.length}`;
 
   try {
@@ -602,7 +620,6 @@ exports.getEvents = async (req, res) => {
       created_at: event.created_at,
       updated_at: event.updated_at,
 
-      // Company business details
       company: {
         id: event.company_id,
         business_name: event.business_name,
