@@ -14,10 +14,11 @@ const validateNdisNumber = (ndisNumber) => {
 
 exports.getDropdownValues = async (req, res) => {
   try {
-    const [eventTypes, disabilityTypes, supportRequirements] = await Promise.all([
+    const [eventTypes, disabilityTypes, supportRequirements,business_categories] = await Promise.all([
       pool.query('SELECT id, name FROM event_types'),
       pool.query('SELECT id, name FROM disability_types'),
       pool.query('SELECT id, name FROM support_requirements'),
+      pool.query('SELECT id, name FROM business_categories'),
     ]);
 
     res.json({
@@ -25,7 +26,8 @@ exports.getDropdownValues = async (req, res) => {
       data:{
         event_types: eventTypes.rows.map(row => ({ id: row.id, value: row.name })),
         disability_types: disabilityTypes.rows.map(row => ({ id: row.id, value: row.name })),
-        support_requirements: supportRequirements.rows.map(row => ({ id: row.id, value: row.name }))
+        support_requirements: supportRequirements.rows.map(row => ({ id: row.id, value: row.name })),
+        business_categories: business_categories.rows.map(row => ({ id: row.id, value: row.name }))
       }
     });
   } catch (error) {

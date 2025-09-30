@@ -189,9 +189,22 @@ exports.register = async (req, res) => {
 };
 
 exports.updateBusinessDetails = async (req, res) => {
-
   const user_id = req.user.userId;
-  const {    
+
+  // If sent via form-data, parse arrays from string (e.g. '["a", "b"]' or comma-separated)
+  const parseArray = (input) => {
+    if (!input) return null;
+    try {
+      // Try to parse as JSON array
+      const parsed = JSON.parse(input);
+      return Array.isArray(parsed) ? parsed : [parsed];
+    } catch {
+      // Fallback: comma-separated
+      return input.split(',').map(s => s.trim());
+    }
+  };
+
+  const {
     business_name,
     business_category,
     business_email,
@@ -201,21 +214,20 @@ exports.updateBusinessDetails = async (req, res) => {
     website_url,
     year_experience,
     address,
-    business_overview
+    business_overview,
+    event_types,
+    accessibility
   } = req.body;
 
-  // File from multer
   const business_logo = req.file ? req.file.filename : null;
 
   if (!user_id) return res.status(400).json({ error: 'User ID is required.' });
 
   try {
-    // Check if user exists and is a company
     const userCheck = await pool.query('SELECT role FROM users WHERE id = $1', [user_id]);
     if (userCheck.rows.length === 0) return res.status(404).json({ error: 'User not found.' });
     if (userCheck.rows[0].role !== 'Company') return res.status(400).json({ error: 'Only companies can update business details.' });
 
-    // Update query
     const query = `
       UPDATE users SET
         business_name = $1,
@@ -228,13 +240,16 @@ exports.updateBusinessDetails = async (req, res) => {
         website_url = $8,
         year_experience = $9,
         address = $10,
-        business_overview = $11
-      WHERE id = $12
+        business_overview = $11,
+        event_types = $12,
+        accessibility = $14
+      WHERE id = $15
+      RETURNING *;
     `;
 
     const values = [
       business_name || null,
-      business_category || null,
+      parseArray(business_category),
       business_email || null,
       business_phone_number || null,
       business_logo || null,
@@ -244,13 +259,16 @@ exports.updateBusinessDetails = async (req, res) => {
       year_experience || null,
       address || null,
       business_overview || null,
+      parseArray(event_types),
+      parseArray(accessibility),
       user_id
     ];
 
-    await pool.query(query, values);
+    const result = await pool.query(query, values);
 
     res.status(200).json({
       status: true,
+      data: result.rows[0],
       message: 'Business details updated successfully.'
     });
 
@@ -644,7 +662,7 @@ exports.updateProfile = async (req, res) => {
     phone_number,
     date_of_birth,
     gender,
-    // company specific
+    // company-specific
     business_name,
     business_category,
     business_email,
@@ -654,11 +672,24 @@ exports.updateProfile = async (req, res) => {
     website_url,
     year_experience,
     address,
-    business_overview
+    business_overview,
+    event_types,
+    accessibility,
   } = req.body;
 
+  // Helper to safely parse arrays from string
+  const parseArray = (input) => {
+    if (!input) return null;
+    try {
+      const parsed = JSON.parse(input);
+      return Array.isArray(parsed) ? parsed : [parsed];
+    } catch {
+      return input.split(',').map(s => s.trim());
+    }
+  };
+
   try {
-    // Fetch existing user
+    // Fetch user
     const userRes = await pool.query('SELECT * FROM users WHERE id = $1', [user_id]);
     if (userRes.rows.length === 0) {
       return res.status(404).json({ status: false, error: 'User not found' });
@@ -682,25 +713,20 @@ exports.updateProfile = async (req, res) => {
       if (!phoneValidation.isValid) return res.status(400).json({ status: false, error: phoneValidation.error });
     }
 
-    // Handle optional file uploads (use existing if not provided)
+    // Handle optional file uploads
     let profile_image = user.profile_image;
     let business_logo = user.business_logo;
 
     if (req.files) {
-      if (req.files['profile_image'] && req.files['profile_image'][0]) {
+      if (req.files['profile_image']?.[0]) {
         profile_image = req.files['profile_image'][0].filename;
       }
-
-      if (req.files['business_logo'] && req.files['business_logo'][0]) {
+      if (req.files['business_logo']?.[0]) {
         business_logo = req.files['business_logo'][0].filename;
       }
     }
 
-    console.log(profile_image);
-    console.log(req.files);
-    
-    
-    // Build update fields
+    // Build dynamic update query
     const fields = [];
     const values = [];
     let index = 1;
@@ -743,7 +769,17 @@ exports.updateProfile = async (req, res) => {
 
       if (business_category) {
         fields.push(`business_category = $${index++}`);
-        values.push(business_category);
+        values.push(parseArray(business_category));
+      }
+
+      if (event_types) {
+        fields.push(`event_types = $${index++}`);
+        values.push(parseArray(event_types));
+      }
+
+      if (accessibility) {
+        fields.push(`accessibility = $${index++}`);
+        values.push(parseArray(accessibility));
       }
 
       if (business_email) {
@@ -795,11 +831,7 @@ exports.updateProfile = async (req, res) => {
     if (fields.length === 0) {
       return res.status(400).json({ status: false, error: 'No data provided for update.' });
     }
-console.log(fields);
-console.log(values);
 
-
-    // Append updated_at and user_id to the query
     const query = `
       UPDATE users
       SET ${fields.join(', ')}, updated_at = NOW()
@@ -886,7 +918,9 @@ exports.getProfile = async (req, res) => {
         website_url,
         year_experience,
         address,
-        business_overview
+        business_overview,
+        event_types,
+        accessibility
       FROM users 
       WHERE id = $1`,
       [user_id]
@@ -927,6 +961,8 @@ exports.getProfile = async (req, res) => {
         year_experience: user.year_experience,
         address: user.address,
         business_overview: user.business_overview,
+        event_types: user.event_types,
+        accessibility: user.accessibility
       };
     }
 

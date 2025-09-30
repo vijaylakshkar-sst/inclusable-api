@@ -24,6 +24,8 @@ const migrationFiles = [
   'createDriversTable.js',
   'createBookingRoutesTable.js',
   'createNotificationsTable.js',
+  'createBusinessCategoryTable.js',
+  'alterUserBusinessCateField.js'
 ];
 
 const runMigration = (file) => {

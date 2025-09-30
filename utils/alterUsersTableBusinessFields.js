@@ -3,7 +3,7 @@ const pool = require('../dbconfig');
 const alterUsersTable = `
 ALTER TABLE users
 ADD COLUMN IF NOT EXISTS business_name TEXT DEFAULT NULL,
-ADD COLUMN IF NOT EXISTS business_category TEXT DEFAULT NULL,
+ADD COLUMN IF NOT EXISTS business_category TEXT[] DEFAULT NULL,
 ADD COLUMN IF NOT EXISTS business_email TEXT DEFAULT NULL,
 ADD COLUMN IF NOT EXISTS business_phone_number TEXT DEFAULT NULL,
 ADD COLUMN IF NOT EXISTS business_logo TEXT DEFAULT NULL,
