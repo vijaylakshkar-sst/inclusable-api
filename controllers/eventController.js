@@ -90,31 +90,159 @@ exports.getAllEventsByCategory = async (req, res) => {
 };
 
 
-exports.getPersonalizedEvents = async (req, res) => {
+// exports.getPersonalizedEvents = async (req, res) => {
 
+//   const userId = req.user?.userId;
+
+//   // Optional chaining to handle unauthenticated access
+
+//   try {
+//     // If no token/user, return all events grouped (same as getAllEventsGrouped)
+//     if (!userId) {
+//       const result = await pool.query(`
+//         SELECT 
+//           id, 
+//           title, 
+//           description, 
+//           start_date, 
+//           end_date, 
+//           suburb, 
+//           postcode, 
+//           state, 
+//           latitude, 
+//           longitude, 
+//           category, 
+//           website, 
+//           image_url, 
+//           host
+//         FROM events
+//         WHERE start_date >= NOW()::timestamp
+//       `);
+
+//       const allEvents = result.rows;
+//       const grouped = {};
+
+//       allEvents.forEach(event => {
+//         if (Array.isArray(event.category)) {
+//           event.category.forEach(cat => {
+//             if (!grouped[cat]) grouped[cat] = [];
+//             grouped[cat].push(event);
+//           });
+//         } else {
+//           if (!grouped['Uncategorized']) grouped['Uncategorized'] = [];
+//           grouped['Uncategorized'].push(event);
+//         }
+//       });
+
+//       return res.json({
+//         status: true,
+//         events: grouped,
+//         personalization: {
+//           hasPreferences: false,
+//           totalCategories: Object.keys(grouped).length,
+//           totalEvents: allEvents.length,
+//           message: "Sign in and complete onboarding to get personalized event recommendations."
+//         }
+//       });
+//     }
+
+//     // ========== Personalized Flow ==========
+//     const userPreferencesQuery = `
+//       SELECT preferred_event_types, primary_disability_type, support_requirements 
+//       FROM ndis_information 
+//       WHERE user_id = $1
+//     `;
+
+//     const userPreferencesResult = await pool.query(userPreferencesQuery, [userId]);
+
+//     let personalizedEvents = {};
+//     let hasPreferences = false;
+
+//     if (userPreferencesResult.rows.length > 0) {
+//       const userPrefs = userPreferencesResult.rows[0];
+//       hasPreferences = true;
+
+//       if (userPrefs.preferred_event_types && userPrefs.preferred_event_types.length > 0) {
+//         const preferredTypes = userPrefs.preferred_event_types;
+
+//         const eventsQuery = `
+//           SELECT 
+//             id, 
+//             title, 
+//             description, 
+//             start_date, 
+//             end_date, 
+//             suburb, 
+//             postcode, 
+//             state, 
+//             latitude, 
+//             longitude, 
+//             category, 
+//             website, 
+//             image_url, 
+//             host
+//           FROM events
+//           WHERE start_date >= NOW()::timestamp 
+//           AND category && $1
+//           ORDER BY start_date ASC
+//         `;
+
+//         const eventsResult = await pool.query(eventsQuery, [preferredTypes]);
+//         const events = eventsResult.rows;
+
+//         events.forEach(event => {
+//           if (Array.isArray(event.category)) {
+//             event.category.forEach(cat => {
+//               if (preferredTypes.includes(cat)) {
+//                 if (!personalizedEvents[cat]) personalizedEvents[cat] = [];
+//                 personalizedEvents[cat].push(event);
+//               }
+//             });
+//           }
+//         });
+//       }
+//     }
+
+//     if (!hasPreferences) {
+//       return res.json({
+//         status: true,
+//         data:{events: {},
+//         personalization: {
+//           hasPreferences: false,
+//           totalCategories: 0,
+//           totalEvents: 0,
+//           message: "Please complete your onboarding to get personalized event recommendations."
+//         }}
+//       });
+//     }
+
+//     const response = {
+//       events: personalizedEvents,
+//       personalization: {
+//         hasPreferences: hasPreferences,
+//         totalCategories: Object.keys(personalizedEvents).length,
+//         totalEvents: Object.values(personalizedEvents).reduce((sum, evts) => sum + evts.length, 0)
+//       }
+//     };
+
+//     res.json({ status: true, data:response});
+
+//   } catch (err) {
+//     console.error('Personalized events error:', err.message);
+//     res.status(500).json({ error: 'Internal Server Error' });
+//   }
+// };
+
+exports.getPersonalizedEvents = async (req, res) => {
   const userId = req.user?.userId;
 
-  // Optional chaining to handle unauthenticated access
-
   try {
-    // If no token/user, return all events grouped (same as getAllEventsGrouped)
+    // ========== If user not logged in ==========
     if (!userId) {
       const result = await pool.query(`
         SELECT 
-          id, 
-          title, 
-          description, 
-          start_date, 
-          end_date, 
-          suburb, 
-          postcode, 
-          state, 
-          latitude, 
-          longitude, 
-          category, 
-          website, 
-          image_url, 
-          host
+          id, title, description, start_date, end_date, suburb, postcode, state, latitude, longitude, 
+          category, website, image_url, host
         FROM events
         WHERE start_date >= NOW()::timestamp
       `);
@@ -160,37 +288,20 @@ exports.getPersonalizedEvents = async (req, res) => {
 
     if (userPreferencesResult.rows.length > 0) {
       const userPrefs = userPreferencesResult.rows[0];
-      hasPreferences = true;
-
       if (userPrefs.preferred_event_types && userPrefs.preferred_event_types.length > 0) {
+        hasPreferences = true;
         const preferredTypes = userPrefs.preferred_event_types;
 
-        const eventsQuery = `
-          SELECT 
-            id, 
-            title, 
-            description, 
-            start_date, 
-            end_date, 
-            suburb, 
-            postcode, 
-            state, 
-            latitude, 
-            longitude, 
-            category, 
-            website, 
-            image_url, 
-            host
+        const eventsResult = await pool.query(`
+          SELECT id, title, description, start_date, end_date, suburb, postcode, state, latitude, longitude, 
+                 category, website, image_url, host
           FROM events
           WHERE start_date >= NOW()::timestamp 
           AND category && $1
           ORDER BY start_date ASC
-        `;
+        `, [preferredTypes]);
 
-        const eventsResult = await pool.query(eventsQuery, [preferredTypes]);
-        const events = eventsResult.rows;
-
-        events.forEach(event => {
+        eventsResult.rows.forEach(event => {
           if (Array.isArray(event.category)) {
             event.category.forEach(cat => {
               if (preferredTypes.includes(cat)) {
@@ -203,19 +314,45 @@ exports.getPersonalizedEvents = async (req, res) => {
       }
     }
 
+    // ========== If user has no preferences (not completed onboarding) ==========
     if (!hasPreferences) {
+      const result = await pool.query(`
+        SELECT id, title, description, start_date, end_date, suburb, postcode, state, latitude, longitude, 
+               category, website, image_url, host
+        FROM events
+        WHERE start_date >= NOW()::timestamp
+      `);
+
+      const allEvents = result.rows;
+      const grouped = {};
+
+      allEvents.forEach(event => {
+        if (Array.isArray(event.category)) {
+          event.category.forEach(cat => {
+            if (!grouped[cat]) grouped[cat] = [];
+            grouped[cat].push(event);
+          });
+        } else {
+          if (!grouped['Uncategorized']) grouped['Uncategorized'] = [];
+          grouped['Uncategorized'].push(event);
+        }
+      });
+
       return res.json({
         status: true,
-        data:{events: {},
-        personalization: {
-          hasPreferences: false,
-          totalCategories: 0,
-          totalEvents: 0,
-          message: "Please complete your onboarding to get personalized event recommendations."
-        }}
+        data: {
+          events: grouped,
+          personalization: {
+            hasPreferences: false,
+            totalCategories: Object.keys(grouped).length,
+            totalEvents: allEvents.length,
+            message: "Please complete your onboarding to get personalized event recommendations."
+          }
+        }
       });
     }
 
+    // ========== Return personalized events ==========
     const response = {
       events: personalizedEvents,
       personalization: {
@@ -225,11 +362,10 @@ exports.getPersonalizedEvents = async (req, res) => {
       }
     };
 
-    res.json({ status: true, data:response});
+    res.json({ status: true, data: response });
 
   } catch (err) {
     console.error('Personalized events error:', err.message);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 };
-

@@ -836,13 +836,14 @@ exports.updateProfile = async (req, res) => {
       UPDATE users
       SET ${fields.join(', ')}, updated_at = NOW()
       WHERE id = $${index}
+      RETURNING *
     `;
 
     values.push(user_id);
 
-    await pool.query(query, values);
+    const result = await pool.query(query, values);
 
-    res.json({ status: true, message: 'Profile updated successfully' });
+    res.json({ status: true, data: result.rows[0], message: 'Profile updated successfully' });
 
   } catch (err) {
     console.error('Profile Update Error:', err.message);
