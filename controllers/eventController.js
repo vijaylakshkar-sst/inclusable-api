@@ -369,3 +369,65 @@ exports.getPersonalizedEvents = async (req, res) => {
     res.status(500).json({ error: 'Internal Server Error' });
   }
 };
+
+
+exports.getGuestPersonalizedEvents = async (req, res) => {
+  const preferredCategories = req.body.categories; // Expecting array of categories
+
+  try {
+    // ========== Get all categories ==========
+    const categoriesResult = await pool.query(`
+      SELECT DISTINCT UNNEST(category) AS category_name FROM events
+    `);
+    const allCategories = categoriesResult.rows.map(row => row.category_name);
+
+    // ========== Fetch events ==========
+    let eventsQuery = `
+      SELECT id, title, description, start_date, end_date, suburb, postcode, state, latitude, longitude, 
+             category, website, image_url, host
+      FROM events
+      WHERE start_date >= NOW()::timestamp
+      ORDER BY start_date ASC
+    `;
+
+    const eventsResult = await pool.query(eventsQuery);
+    const allEvents = eventsResult.rows;
+
+    // ========== Group events ==========
+    let groupedEvents = {};
+
+    allEvents.forEach(event => {
+      if (Array.isArray(event.category)) {
+        event.category.forEach(cat => {
+          // If user provided preferred categories, only include those
+          if (!preferredCategories || preferredCategories.includes(cat)) {
+            if (!groupedEvents[cat]) groupedEvents[cat] = [];
+            groupedEvents[cat].push(event);
+          }
+        });
+      } else {
+        if (!groupedEvents['Uncategorized']) groupedEvents['Uncategorized'] = [];
+        groupedEvents['Uncategorized'].push(event);
+      }
+    });
+
+    const response = {
+      events: groupedEvents,
+      categories: allCategories,
+      personalization: {
+        hasPreferences: !!(preferredCategories && preferredCategories.length > 0),
+        totalCategories: Object.keys(groupedEvents).length,
+        totalEvents: Object.values(groupedEvents).reduce((sum, evts) => sum + evts.length, 0),
+        message: preferredCategories && preferredCategories.length > 0
+          ? "Personalized events based on your selected categories."
+          : "No categories selected, showing all upcoming events."
+      }
+    };
+
+    res.json({ status: true, data: response });
+
+  } catch (err) {
+    console.error('Personalized events error:', err.message);
+    res.status(500).json({ error: 'Internal Server Error' });
+  }
+};

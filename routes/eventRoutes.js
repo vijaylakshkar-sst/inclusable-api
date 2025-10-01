@@ -12,6 +12,8 @@ router.get('/events/by-category', eventController.getAllEventsByCategory);
 // New personalized events endpoint (requires authentication)
 router.get('/events/personalized', optionalAuth, eventController.getPersonalizedEvents);
 
+router.post('/events/guest-personalized', eventController.getGuestPersonalizedEvents);
+
 router.get('/semantic-search', semanticSearch.semanticSearch);
 
 module.exports = router; 
