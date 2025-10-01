@@ -83,7 +83,7 @@ function toPgVectorString(arr) {
 }
 
 async function importEvents() {
-  const data = JSON.parse(fs.readFileSync(__dirname + '/../public/events_clean_new.json', 'utf8'));
+  const data = JSON.parse(fs.readFileSync(__dirname + '/../public/events3.json', 'utf8'));
 
   const client = await pool.connect();
   try {
