@@ -3,7 +3,7 @@
 const app = require('./app');
 
 const PORT = process.env.PORT || 4000;
-const HOST = '192.168.29.194';
+const HOST = '192.168.0.40';
 // const HOST = 'localhost';
 
 

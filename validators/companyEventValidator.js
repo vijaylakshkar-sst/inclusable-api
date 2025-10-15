@@ -14,7 +14,9 @@ exports.eventCreateSchema = Joi.object({
   price: Joi.number().min(0).allow(null),
   total_available_seats: Joi.number().integer().min(0).allow(null),
   event_address: Joi.string().allow(''),
-  how_to_reach_destination: Joi.string().allow('')
+  how_to_reach_destination: Joi.string().allow(''),
+  latitude: Joi.number().allow(null),
+  longitude: Joi.number().allow(null)
 });
 
 exports.eventUpdateSchema = Joi.object({
@@ -31,5 +33,7 @@ exports.eventUpdateSchema = Joi.object({
   price: Joi.number().min(0).allow(null),
   total_available_seats: Joi.number().integer().min(0).allow(null),
   event_address: Joi.string().allow(''),
-  how_to_reach_destination: Joi.string().allow('')
+  how_to_reach_destination: Joi.string().allow(''),
+  latitude: Joi.number().allow(null),
+  longitude: Joi.number().allow(null)
 });

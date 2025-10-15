@@ -30,7 +30,7 @@ router.put(
 );
 router.get('/company-events-bookings', auth, companyEventsController.getBookingsByCompany);
 router.get('/company-events-bookings/:id', auth, companyEventsController.getBookingById);
-
+router.delete('/company-events/:id/image', auth,companyEventsController.deleteCompanyEventImage);
 
 router.post('/partner-events',  companyEventsController.getEvents);
 router.get('/partner-events/:id', companyEventsController.getEventById); // details

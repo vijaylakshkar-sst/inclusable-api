@@ -1,15 +1,18 @@
 const pool = require('../dbconfig');
 const bcrypt = require('bcrypt');
-// const nodemailer = require('nodemailer');
+const nodemailer = require('nodemailer');
 const multer = require('multer');
 const path = require('path');
 const jwt = require('jsonwebtoken');
 const { stat } = require('fs');
+const fs = require('fs');
 
-// const EMAIL_FROM = process.env.EMAIL_FROM ;
-// const EMAIL_PASS = process.env.EMAIL_PASS ;
-// const EMAIL_HOST = process.env.EMAIL_HOST ;
-// const EMAIL_PORT = process.env.EMAIL_PORT ;
+const templatePath = path.join(__dirname, '../emailTemplates/otpEmailTemplate.html');
+
+const EMAIL_FROM = process.env.EMAIL_FROM ;
+const EMAIL_PASS = process.env.EMAIL_PASS ;
+const EMAIL_HOST = process.env.EMAIL_HOST ;
+const EMAIL_PORT = process.env.EMAIL_PORT ;
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret';
 const BASE_IMAGE_URL = process.env.BASE_IMAGE_URL;
@@ -77,22 +80,22 @@ const validateEmail = (email) => {
   return { isValid: true };
 };
 
-// const transporter = nodemailer.createTransport({
-//     host: EMAIL_HOST,
-//     port: EMAIL_PORT,
-//     secure: false, // true for port 465, false for 587
-//     auth: {
-//       user: EMAIL_FROM,
-//       pass: EMAIL_PASS,
-//     },
-//     tls: {
-//       rejectUnauthorized: false, // Add this line for Gmail in dev
-//     },
-//   });
+const transporter = nodemailer.createTransport({
+    host: EMAIL_HOST,
+    port: EMAIL_PORT,
+    secure: false, // true for port 465, false for 587
+    auth: {
+      user: EMAIL_FROM,
+      pass: EMAIL_PASS,
+    },
+    tls: {
+      rejectUnauthorized: false, // Add this line for Gmail in dev
+    },
+  });
 
-// function generateVerificationCode() {
-//   return Math.floor(1000 + Math.random() * 9000).toString(); // 4-digit code
-// }
+function generateVerificationCode() {
+  return Math.floor(1000 + Math.random() * 9000).toString(); // 4-digit code
+}
 
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
@@ -148,42 +151,55 @@ exports.register = async (req, res) => {
   if (!phoneValidation.isValid) return res.status(400).json({ error: phoneValidation.error });
 
   try {
-   const existing = await pool.query(
+    const existing = await pool.query(
       'SELECT id, is_verified FROM users WHERE email = $1',
       [email]
     );
 
     if (existing.rows.length > 0) {
       if (existing.rows[0].is_verified) {
-        // Email already verified
         return res.status(400).json({ error: 'Email already registered and verified.' });
       } else {
-        // Email exists but not verified → delete old record
         await pool.query('DELETE FROM users WHERE id = $1', [existing.rows[0].id]);
       }
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    const verification_code = '1234';
+    const verification_code = generateVerificationCode(); // Generate OTP
 
-    const query = `
+    const insertQuery = `
       INSERT INTO users (
         full_name, email, password, phone_number, role, verification_code
       ) VALUES ($1, $2, $3, $4, $5, $6)
     `;
-
     const values = [full_name, email, hashedPassword, phone_number, role, verification_code];
+    await pool.query(insertQuery, values);
 
-    await pool.query(query, values);
+
+    let emailTemplate = fs.readFileSync(templatePath, 'utf-8');
+
+    // Replace placeholders
+    emailTemplate = emailTemplate
+      .replace('{{full_name}}', full_name)
+      .replace('{{otp}}', verification_code);
+
+    // ✅ Send Email
+    const mailOptions = {
+      from: `"Inclusable" <${EMAIL_FROM}>`,
+      to: email,
+      subject: 'Verify Your Email - OTP Code',
+      html: emailTemplate,
+    };
+
+    await transporter.sendMail(mailOptions);
 
     res.status(200).json({
       status: true,
-      message: `Registration successful as ${role}. Please verify your email.`,
-      data:verification_code
+      message: `Registration successful as ${role}. OTP has been sent to your email.`,
     });
 
   } catch (err) {
-    console.error('Registration error:', err.message);
+    console.error('Registration error:', err);
     res.status(500).json({ error: 'Internal server error.' });
   }
 };
@@ -296,29 +312,41 @@ exports.verifyEmail = async (req, res) => {
     if (user.verification_code !== code && type === 'register') {
       return res.status(400).json({ error: 'Invalid verification code.' });
     }
+
+     if (user.verification_code !== code && type === 'forget') {
+      return res.status(400).json({ error: 'Invalid verification code.' });
+    }
     await pool.query('UPDATE users SET is_verified = TRUE, verification_code = NULL WHERE id = $1', [user.id]);
     
     // Issue JWT after verification
-    const token = jwt.sign({ userId: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
-    res.json({
-      status: true,
-      message: 'Email verified successfully.',
-      token,
-      user: {
-        id: user.id,
-        full_name: user.full_name,
-        email: user.email,
-        phone_number: user.phone_number,
-        role: user.role,
-        is_verified: true, // since just verified
-        profile_image_url: user.profile_image ? `${BASE_IMAGE_URL}/${user.profile_image}` : null,
-        profile_image: user.profile_image,
-        date_of_birth: user.date_of_birth,
-        gender: user.gender,
-        created_at: user.created_at,
-        updated_at: user.updated_at
-      }
-    });
+    if(type === 'register'){
+      const token = jwt.sign({ userId: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+      res.json({
+        status: true,
+        message: 'Email verified successfully.',
+        token,
+        user: {
+          id: user.id,
+          full_name: user.full_name,
+          email: user.email,
+          phone_number: user.phone_number,
+          role: user.role,
+          is_verified: true, // since just verified
+          profile_image_url: user.profile_image ? `${BASE_IMAGE_URL}/${user.profile_image}` : null,
+          profile_image: user.profile_image,
+          date_of_birth: user.date_of_birth,
+          gender: user.gender,
+          created_at: user.created_at,
+          updated_at: user.updated_at
+        }
+      });
+    }else{
+      res.json({
+        status: true,
+        message: 'Email verified successfully.',        
+      });
+    }
+   
   } catch (err) {
     console.error('Email verification error:', err.message);
     res.status(500).json({ error: 'Internal server error.' });
@@ -331,7 +359,7 @@ exports.resendVerificationCode = async (req, res) => {
     return res.status(400).json({ error: 'Email is required.' });
   }
   try {
-    const userRes = await pool.query('SELECT id, is_verified FROM users WHERE email = $1', [email]);
+    const userRes = await pool.query('SELECT id, is_verified,full_name FROM users WHERE email = $1', [email]);
     if (userRes.rows.length === 0) {
       return res.status(404).json({ error: 'User not found.' });
     }
@@ -339,17 +367,27 @@ exports.resendVerificationCode = async (req, res) => {
     if (user.is_verified) {
       return res.status(400).json({ error: 'Email already verified.' });
     }
-    const newCode = '1234';
-    await pool.query('UPDATE users SET verification_code = $1 WHERE id = $2', [newCode, user.id]);
-    // Commented out email sending for now
-    // await transporter.sendMail({
-    //   from: EMAIL_FROM,
-    //   to: email,
-    //   subject: 'Resend: Verify your email',
-    //   text: `Your new verification code is: ${newCode}`,
-    //   html: `<p>Your new verification code is: <b>${newCode}</b></p>`
-    // });
-    res.json({status: true, message: 'Verification code resent.', verification_code: newCode });
+    const verification_code = generateVerificationCode(); // Generate OTP
+    await pool.query('UPDATE users SET verification_code = $1 WHERE id = $2', [verification_code, user.id]);
+
+    let emailTemplate = fs.readFileSync(templatePath, 'utf-8');
+
+    // Replace placeholders
+    emailTemplate = emailTemplate
+      .replace('{{full_name}}', user.full_name)
+      .replace('{{otp}}', verification_code);
+
+    // ✅ Send Email
+    const mailOptions = {
+      from: `"Inclusable" <${EMAIL_FROM}>`,
+      to: email,
+      subject: 'Verify Your Email - OTP Code',
+      html: emailTemplate,
+    };
+
+    await transporter.sendMail(mailOptions);
+
+    res.json({status: true, message: 'Verification code resent successfully.' });
   } catch (err) {
     console.error('Resend verification error:', err.message);
     res.status(500).json({status: false, error: 'Internal server error.' });
@@ -890,6 +928,36 @@ exports.changePassword = async (req, res) => {
   }
 };
 
+exports.updatePassword = async (req, res) => { 
+
+  const { new_password, email } = req.body;
+
+  if (!email) return res.status(400).json({ status: false, error: 'Email required' });
+
+  if (!new_password) {
+    return res.status(400).json({ error: 'new passwords is required.' });
+  }
+
+  try {
+    // Fetch user by ID
+    const userResult = await pool.query('SELECT password FROM users WHERE email = $1', [email]);
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ status: false, error: 'User not found.' });
+    }
+
+    const user = userResult.rows[0];   
+
+    // Hash and update new password
+    const hashedPassword = await bcrypt.hash(new_password, 10);
+    await pool.query('UPDATE users SET password = $1, updated_at = NOW() WHERE email = $2', [hashedPassword, email]);
+
+    res.json({  message: 'Password changed successfully.', status: true });
+  } catch (err) {
+    console.error('Change Password Error:', err.message);
+    res.status(500).json({ status: false, error: 'Failed to change password.' });
+  }
+};
+
 exports.getProfile = async (req, res) => {
   const user_id = req.user?.userId;
 
@@ -931,6 +999,25 @@ exports.getProfile = async (req, res) => {
       return res.status(404).json({ error: 'User not found.' });
     }
 
+    const parseStringToArray = (value) => {
+      if (!value) return [];
+
+      // If it's already an array (Postgres returns text[] as array)
+      if (Array.isArray(value)) return value;
+
+      // If it's a string (like "{item1,item2}")
+      if (typeof value === "string") {
+        return value
+          .replace(/[{}]/g, "")
+          .split(",")
+          .map((s) => s.trim().replace(/^"|"$/g, ""))
+          .filter(Boolean);
+      }
+
+      // Otherwise, return empty array
+      return [];
+    };
+    
     const user = result.rows[0];
 
     // Format date_of_birth
@@ -962,8 +1049,8 @@ exports.getProfile = async (req, res) => {
         year_experience: user.year_experience,
         address: user.address,
         business_overview: user.business_overview,
-        event_types: user.event_types,
-        accessibility: user.accessibility
+        event_types: parseStringToArray(user.event_types),
+        accessibility: parseStringToArray(user.accessibility)
       };
     }
 
@@ -987,5 +1074,59 @@ exports.getProfile = async (req, res) => {
   } catch (err) {
     console.error('Get Profile Error:', err.message);
     res.status(500).json({ status: false, error: 'Failed to fetch profile.' });
+  }
+};
+
+
+exports.sendOTP = async (req, res) => {
+  const { email } = req.body;
+
+  try {
+    const verification_code = generateVerificationCode(); // Generate OTP
+
+    // ✅ Update OTP for existing user
+    const updateQuery = `
+      UPDATE users
+      SET verification_code = $1
+      WHERE email = $2
+      RETURNING id, email
+    `;
+    const values = [verification_code, email];
+    const result = await pool.query(updateQuery, values);
+
+    if (result.rowCount === 0) {
+      // User not found
+      return res.status(404).json({
+        status: false,
+        message: 'User not found. Please register first.',
+      });
+    }
+
+    // Read email template
+    let emailTemplate = fs.readFileSync(templatePath, 'utf-8');
+
+    // Replace placeholders
+    emailTemplate = emailTemplate
+      .replace('{{full_name}}', email)
+      .replace('{{otp}}', verification_code);
+
+    // Send email
+    const mailOptions = {
+      from: `"Inclusable" <${EMAIL_FROM}>`,
+      to: email,
+      subject: 'Verify Your Email - OTP Code',
+      html: emailTemplate,
+    };
+
+    await transporter.sendMail(mailOptions);
+
+    res.status(200).json({
+      status: true,
+      message: `OTP has been sent to ${email}.`,
+    });
+
+  } catch (err) {
+    console.error('Send OTP error:', err);
+    res.status(500).json({ error: 'Internal server error.' });
   }
 };

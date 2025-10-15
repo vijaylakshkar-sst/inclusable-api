@@ -25,7 +25,9 @@ exports.createCompanyEvent = async (req, res) => {
     price,
     total_available_seats,
     event_address,
-    how_to_reach_destination
+    how_to_reach_destination,
+    latitude,
+    longitude
   } = req.body;
 
   const user_id = req.user?.userId; // Auth middleware must set req.user
@@ -45,13 +47,13 @@ exports.createCompanyEvent = async (req, res) => {
         event_description, event_thumbnail, event_images,
         start_date, end_date, start_time, end_time,
         price_type, price, total_available_seats,
-        event_address, how_to_reach_destination
+        event_address, how_to_reach_destination,latitude,longitude
       ) VALUES (
         $1, $2, $3, $4, $5,
         $6, $7, $8,
         $9, $10, $11, $12,
         $13, $14, $15,
-        $16, $17
+        $16, $17,$18,$19
       ) RETURNING id
     `;
 
@@ -72,7 +74,9 @@ exports.createCompanyEvent = async (req, res) => {
       price || null,
       total_available_seats || null,
       event_address,
-      how_to_reach_destination
+      how_to_reach_destination,
+      latitude,
+      longitude
     ];
 
     const result = await pool.query(query, values);
@@ -123,7 +127,7 @@ exports.updateCompanyEvent = async (req, res) => {
       'event_name', 'event_types', 'disability_types', 'accessibility_types',
       'event_description', 'start_date', 'end_date', 'start_time', 'end_time',
       'price_type', 'price', 'total_available_seats',
-      'event_address', 'how_to_reach_destination'
+      'event_address', 'how_to_reach_destination','latitude','longitude'
     ];
 
     const updates = [];
@@ -183,6 +187,61 @@ exports.updateCompanyEvent = async (req, res) => {
   } catch (err) {
     console.error('Update Event Error:', err.message);
     res.status(500).json({ status: false, error: 'Failed to update event' });
+  }
+};
+
+exports.deleteCompanyEventImage = async (req, res) => {
+  const { id } = req.params;
+  const { filename } = req.body; // or use req.query.filename
+  const user_id = req.user?.userId;
+
+  if (!user_id) {
+    return res.status(401).json({ status: false, error: 'Unauthorized' });
+  }
+
+  if (!filename) {
+    return res.status(400).json({ status: false, error: 'Filename is required' });
+  }
+
+  try {
+    // 1. Check event and ownership
+    const eventResult = await pool.query(
+      'SELECT * FROM company_events WHERE id = $1 AND user_id = $2',
+      [id, user_id]
+    );
+
+    if (eventResult.rowCount === 0) {
+      return res.status(404).json({ status: false, error: 'Event not found or unauthorized' });
+    }
+
+    const event = eventResult.rows[0];
+    const images = Array.isArray(event.event_images) ? event.event_images : [];
+
+    // 2. Filter out the image
+    const updatedImages = images.filter(img => img !== filename);
+
+    // 3. Update database
+    await pool.query(
+      'UPDATE company_events SET event_images = $1 WHERE id = $2 AND user_id = $3',
+      [updatedImages, id, user_id]
+    );
+
+    // 4. Optionally delete the file from disk
+    const fs = require('fs');
+    const path = require('path');
+    const filePath = path.join(__dirname, '../../uploads/events', filename);
+
+    fs.unlink(filePath, (err) => {
+      if (err) {
+        console.warn(`Could not delete image file: ${filePath}`, err.message);
+      }
+    });
+
+    return res.json({ status: true, message: 'Image deleted successfully' });
+
+  } catch (err) {
+    console.error('Delete Image Error:', err.message);
+    return res.status(500).json({ status: false, error: 'Failed to delete image' });
   }
 };
 

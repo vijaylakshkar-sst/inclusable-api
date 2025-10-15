@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS transactions (
   payment_intent_id VARCHAR(255) UNIQUE,
   amount NUMERIC(10,2),
   currency VARCHAR(10) DEFAULT 'aud',
-  status VARCHAR(50), -- pending, succeeded, failed
+  status VARCHAR(50),
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 `;

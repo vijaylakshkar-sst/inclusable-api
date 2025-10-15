@@ -11,10 +11,14 @@ router.post('/login', userController.login);
 router.post('/logout', userController.logout);
 router.post('/users/additional-details', auth, uploadFiles, userController.addAdditionalDetails);
 router.get('/users/onboarding-status', auth, userController.checkOnboardingCompletion);
+router.post('/send-otp', userController.sendOTP);
+
 
 router.get('/profile', auth, userController.getProfile);
 
 router.put('/change-password', auth, userController.changePassword);
+
+router.put('/update-password', userController.updatePassword);
 
 router.put('/company-profile/update', auth, uploadFiles, userController.updateProfile );
 

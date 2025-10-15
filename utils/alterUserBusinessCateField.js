@@ -2,7 +2,7 @@ const pool = require('../dbconfig');
 
 const alterUserBusinessCateField = `
   ALTER TABLE users
-  ADD COLUMN IF NOT EXISTS event_types TEXT[] DEFAULT NULL;
+  ADD COLUMN IF NOT EXISTS event_types TEXT[] DEFAULT NULL,
   ADD COLUMN IF NOT EXISTS accessibility TEXT[] DEFAULT NULL;
 `;
 
