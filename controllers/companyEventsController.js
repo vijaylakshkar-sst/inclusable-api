@@ -57,12 +57,23 @@ exports.createCompanyEvent = async (req, res) => {
       ) RETURNING id
     `;
 
+    const parseArray = (input) => {
+    if (!input) return null;
+    try {
+      const parsed = JSON.parse(input);
+      return Array.isArray(parsed) ? parsed : [parsed];
+    } catch {
+      return input.split(',').map(s => s.trim());
+    }
+  };
+
+
     const values = [
       user_id,
       event_name,
-      event_types ? event_types.split(',').map(s => s.trim()) : null,
-      disability_types ? disability_types.split(',').map(s => s.trim()) : null,
-      accessibility_types ? accessibility_types.split(',').map(s => s.trim()) : null,
+      event_types ? parseArray(event_types) : null,
+      disability_types ? parseArray(disability_types)  : null,
+      accessibility_types ? parseArray(accessibility_types) : null,
       event_description,
       thumbnail,
       eventImages,
@@ -134,22 +145,21 @@ exports.updateCompanyEvent = async (req, res) => {
     const values = [];
     let index = 1;
 
+     const parseArray = (input) => {
+      if (!input) return null;
+      try {
+        const parsed = JSON.parse(input);
+        return Array.isArray(parsed) ? parsed : [parsed];
+      } catch {
+        return input.split(',').map(s => s.trim());
+      }
+    };
+
     for (const field of fields) {
       const value = req.body[field];
 
       if (['event_types', 'disability_types', 'accessibility_types'].includes(field)) {
-        let parsedArray = [];
-
-        if (Array.isArray(value)) {
-          parsedArray = value.map(v => v.toString());
-        } else if (typeof value === 'string') {
-          parsedArray = value.split(',').map(v => v.trim().toString());
-        } else if (typeof value === 'number') {
-          parsedArray = [value.toString()];
-        } else {
-          parsedArray = [];
-        }
-
+        const parsedArray = parseArray(value);
         updates.push(`${field} = $${index}::text[]`);
         values.push(parsedArray);
       } else {
@@ -159,6 +169,8 @@ exports.updateCompanyEvent = async (req, res) => {
 
       index++;
     }
+
+    
 
     // Add image fields
     updates.push(`event_thumbnail = $${index}`);
@@ -328,7 +340,6 @@ exports.getEventById = async (req, res) => {
   const { id } = req.params;
 
   try {
-    // Fetch event and company details
     const result = await pool.query(
       `
       SELECT 
@@ -358,7 +369,31 @@ exports.getEventById = async (req, res) => {
 
     const event = result.rows[0];
 
-    // Format images
+    // ✅ Safely parse event_types, disability_types, accessibility_types
+     const parseStringToArray = (value) => {
+      if (!value) return [];
+
+      // If it's already an array (Postgres returns text[] as array)
+      if (Array.isArray(value)) return value;
+
+      // If it's a string (like "{item1,item2}")
+      if (typeof value === "string") {
+        return value
+          .replace(/[{}]/g, "")
+          .split(",")
+          .map((s) => s.trim().replace(/^"|"$/g, ""))
+          .filter(Boolean);
+      }
+
+      // Otherwise, return empty array
+      return [];
+    };
+
+    event.event_types = parseStringToArray(event.event_types);
+    event.disability_types = parseStringToArray(event.disability_types);
+    event.accessibility_types = parseStringToArray(event.accessibility_types);
+
+    // Format image URLs
     event.event_thumbnail = event.event_thumbnail
       ? `${BASE_EVENT_IMAGE_URL}/${event.event_thumbnail}`
       : null;
@@ -385,7 +420,7 @@ exports.getEventById = async (req, res) => {
       business_overview: event.business_overview,
     };
 
-    // Remove business fields from event object
+    // Remove company fields from event object
     const {
       company_id,
       business_name,
@@ -402,7 +437,7 @@ exports.getEventById = async (req, res) => {
       ...cleanEvent
     } = event;
 
-    // --- New: fetch total bookings and latest 4 booked users ---
+    // --- Fetch bookings ---
     const bookingsResult = await pool.query(
       `
       SELECT eb.id, eb.user_id, u.full_name, u.email, u.phone_number, eb.number_of_tickets, eb.total_amount, u.profile_image
@@ -416,21 +451,18 @@ exports.getEventById = async (req, res) => {
     );
 
     const totalBookingsResult = await pool.query(
-      `
-      SELECT COUNT(*) AS total_bookings
-      FROM event_bookings
-      WHERE event_id = $1
-      `,
+      `SELECT COUNT(*) AS total_bookings FROM event_bookings WHERE event_id = $1`,
       [id]
     );
 
     const totalBookings = parseInt(totalBookingsResult.rows[0].total_bookings, 10);
     const latestBookings = bookingsResult.rows.map(user => ({
       ...user,
-      profile_image_url: user.profile_image ? `${BASE_IMAGE_URL}/${user.profile_image}` : null,
+      profile_image_url: user.profile_image
+        ? `${BASE_IMAGE_URL}/${user.profile_image}`
+        : null,
     }));
 
-    
     res.json({
       status: true,
       data: {

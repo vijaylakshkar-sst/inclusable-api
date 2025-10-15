@@ -86,6 +86,50 @@ exports.submitNdisInfo = async (req, res) => {
     // Fetch updated user details
     const userRes = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
     const user = userRes.rows[0];
+
+    const parseStringToArray = (value) => {
+      if (!value) return [];
+      if (Array.isArray(value)) return value;
+      if (typeof value === "string") {
+        return value
+          .replace(/[{}]/g, "")
+          .split(",")
+          .map((s) => s.trim().replace(/^"|"$/g, ""))
+          .filter(Boolean);
+      }
+      return [];
+    };
+
+
+      // Step 2: Fetch NDIS Information
+    const ndisResult = await pool.query(
+      `SELECT 
+        id,
+        ndis_number,
+        preferred_event_types,
+        primary_disability_type,
+        support_requirements,
+        created_at,
+        updated_at
+      FROM ndis_information 
+      WHERE user_id = $1`,
+      [user.id]
+    );
+
+    // Step 5: NDIS Information
+    let ndisInfo = null;
+    if (ndisResult.rows.length > 0) {
+      const ndis = ndisResult.rows[0];
+      ndisInfo = {
+        ndis_number: ndis.ndis_number,
+        preferred_event_types: parseStringToArray(ndis.preferred_event_types),
+        primary_disability_type: parseStringToArray(ndis.primary_disability_type),
+        support_requirements: parseStringToArray(ndis.support_requirements),
+        created_at: ndis.created_at,
+        updated_at: ndis.updated_at,
+      };
+    }
+
     res.json({
       status: true,
       message: 'NDIS information saved successfully.',
@@ -100,6 +144,7 @@ exports.submitNdisInfo = async (req, res) => {
         profile_image: user.profile_image,
         date_of_birth: user.date_of_birth,
         gender: user.gender,
+        ndis_information: ndisInfo,
         created_at: user.created_at,
         updated_at: user.updated_at
       }

@@ -692,7 +692,7 @@ exports.logout = (req, res) => {
 exports.updateProfile = async (req, res) => {
   const user_id = req.user?.userId;
 
-  if (!user_id) return res.status(401).json({ error: 'Unauthorized' });
+  if (!user_id) return res.status(401).json({ error: "Unauthorized" });
 
   const {
     full_name,
@@ -715,177 +715,185 @@ exports.updateProfile = async (req, res) => {
     accessibility,
   } = req.body;
 
-  // Helper to safely parse arrays from string
+  // 🔹 Helper: safely parse arrays from string or JSON
   const parseArray = (input) => {
     if (!input) return null;
     try {
       const parsed = JSON.parse(input);
       return Array.isArray(parsed) ? parsed : [parsed];
     } catch {
-      return input.split(',').map(s => s.trim());
+      return input.split(",").map((s) => s.trim());
     }
   };
 
   try {
-    // Fetch user
-    const userRes = await pool.query('SELECT * FROM users WHERE id = $1', [user_id]);
+    // 🔹 Fetch user
+    const userRes = await pool.query("SELECT * FROM users WHERE id = $1", [user_id]);
     if (userRes.rows.length === 0) {
-      return res.status(404).json({ status: false, error: 'User not found' });
+      return res.status(404).json({ status: false, error: "User not found" });
     }
 
     const user = userRes.rows[0];
 
-    // Validate inputs
-    if (full_name) {
-      const nameValidation = validateFullName(full_name);
-      if (!nameValidation.isValid) return res.status(400).json({ status: false, error: nameValidation.error });
-    }
-
-    if (email) {
-      const emailValidation = validateEmail(email);
-      if (!emailValidation.isValid) return res.status(400).json({ status: false, error: emailValidation.error });
-    }
-
-    if (phone_number) {
-      const phoneValidation = validatePhoneNumber(phone_number);
-      if (!phoneValidation.isValid) return res.status(400).json({ status: false, error: phoneValidation.error });
-    }
-
-    // Handle optional file uploads
+    // 🔹 Handle file uploads
     let profile_image = user.profile_image;
     let business_logo = user.business_logo;
 
     if (req.files) {
-      if (req.files['profile_image']?.[0]) {
-        profile_image = req.files['profile_image'][0].filename;
+      if (req.files["profile_image"]?.[0]) {
+        profile_image = req.files["profile_image"][0].filename;
       }
-      if (req.files['business_logo']?.[0]) {
-        business_logo = req.files['business_logo'][0].filename;
+      if (req.files["business_logo"]?.[0]) {
+        business_logo = req.files["business_logo"][0].filename;
       }
     }
 
-    // Build dynamic update query
+    // 🔹 Build dynamic SQL update
     const fields = [];
     const values = [];
     let index = 1;
 
-    if (full_name) {
-      fields.push(`full_name = $${index++}`);
-      values.push(full_name);
-    }
-
-    if (email) {
-      fields.push(`email = $${index++}`);
-      values.push(email);
-    }
-
-    if (phone_number) {
-      fields.push(`phone_number = $${index++}`);
-      values.push(phone_number);
-    }
-
-    if (date_of_birth) {
-      fields.push(`date_of_birth = $${index++}`);
-      values.push(date_of_birth);
-    }
-
-    if (gender) {
-      fields.push(`gender = $${index++}`);
-      values.push(gender);
-    }
-
-    if (profile_image) {
-      fields.push(`profile_image = $${index++}`);
-      values.push(profile_image);
-    }
-
-    if (user.role === 'Company') {
-      if (business_name) {
-        fields.push(`business_name = $${index++}`);
-        values.push(business_name);
+    const pushField = (key, value) => {
+      if (value !== undefined && value !== null) {
+        fields.push(`${key} = $${index++}`);
+        values.push(value);
       }
+    };
 
-      if (business_category) {
-        fields.push(`business_category = $${index++}`);
-        values.push(parseArray(business_category));
-      }
+    pushField("full_name", full_name);
+    pushField("email", email);
+    pushField("phone_number", phone_number);
+    pushField("date_of_birth", date_of_birth);
+    pushField("gender", gender);
+    pushField("profile_image", profile_image);
 
-      if (event_types) {
-        fields.push(`event_types = $${index++}`);
-        values.push(parseArray(event_types));
-      }
-
-      if (accessibility) {
-        fields.push(`accessibility = $${index++}`);
-        values.push(parseArray(accessibility));
-      }
-
-      if (business_email) {
-        fields.push(`business_email = $${index++}`);
-        values.push(business_email);
-      }
-
-      if (business_phone_number) {
-        fields.push(`business_phone_number = $${index++}`);
-        values.push(business_phone_number);
-      }
-
-      if (business_logo) {
-        fields.push(`business_logo = $${index++}`);
-        values.push(business_logo);
-      }
-
-      if (abn_number) {
-        fields.push(`abn_number = $${index++}`);
-        values.push(abn_number);
-      }
-
-      if (ndis_registration_number) {
-        fields.push(`ndis_registration_number = $${index++}`);
-        values.push(ndis_registration_number);
-      }
-
-      if (website_url) {
-        fields.push(`website_url = $${index++}`);
-        values.push(website_url);
-      }
-
-      if (year_experience) {
-        fields.push(`year_experience = $${index++}`);
-        values.push(year_experience);
-      }
-
-      if (address) {
-        fields.push(`address = $${index++}`);
-        values.push(address);
-      }
-
-      if (business_overview) {
-        fields.push(`business_overview = $${index++}`);
-        values.push(business_overview);
-      }
+    if (user.role === "Company") {
+      pushField("business_name", business_name);
+      pushField("business_category", parseArray(business_category));
+      pushField("event_types", parseArray(event_types));
+      pushField("accessibility", parseArray(accessibility));
+      pushField("business_email", business_email);
+      pushField("business_phone_number", business_phone_number);
+      pushField("business_logo", business_logo);
+      pushField("abn_number", abn_number);
+      pushField("ndis_registration_number", ndis_registration_number);
+      pushField("website_url", website_url);
+      pushField("year_experience", year_experience);
+      pushField("address", address);
+      pushField("business_overview", business_overview);
     }
 
     if (fields.length === 0) {
-      return res.status(400).json({ status: false, error: 'No data provided for update.' });
+      return res.status(400).json({ status: false, error: "No data provided for update." });
     }
 
     const query = `
       UPDATE users
-      SET ${fields.join(', ')}, updated_at = NOW()
+      SET ${fields.join(", ")}, updated_at = NOW()
       WHERE id = $${index}
       RETURNING *
     `;
-
     values.push(user_id);
 
     const result = await pool.query(query, values);
+    const updatedUser = result.rows[0];
 
-    res.json({ status: true, data: result.rows[0], message: 'Profile updated successfully' });
+    // 🔹 Add full URLs
+    const profile_image_url = updatedUser.profile_image
+      ? `${BASE_IMAGE_URL}/${updatedUser.profile_image}`
+      : null;
+    const business_logo_url =
+      updatedUser.business_logo ? `${BASE_IMAGE_URL}/${updatedUser.business_logo}` : null;
 
+    // 🔹 Build role-based response
+    let responseData = {
+      id: updatedUser.id,
+      full_name: updatedUser.full_name,
+      email: updatedUser.email,
+      phone_number: updatedUser.phone_number,
+      date_of_birth: updatedUser.date_of_birth,
+      gender: updatedUser.gender,
+      role: updatedUser.role,
+      profile_image_url,
+    };
+
+    const parseStringToArray = (value) => {
+      if (!value) return [];
+      if (Array.isArray(value)) return value;
+      if (typeof value === "string") {
+        return value
+          .replace(/[{}]/g, "")
+          .split(",")
+          .map((s) => s.trim().replace(/^"|"$/g, ""))
+          .filter(Boolean);
+      }
+      return [];
+    };
+
+
+      // Step 2: Fetch NDIS Information
+    const ndisResult = await pool.query(
+      `SELECT 
+        id,
+        ndis_number,
+        preferred_event_types,
+        primary_disability_type,
+        support_requirements,
+        created_at,
+        updated_at
+      FROM ndis_information 
+      WHERE user_id = $1`,
+      [updatedUser.id]
+    );
+
+    // Step 5: NDIS Information
+    let ndisInfo = null;
+    if (ndisResult.rows.length > 0) {
+      const ndis = ndisResult.rows[0];
+      ndisInfo = {
+        ndis_number: ndis.ndis_number,
+        preferred_event_types: parseStringToArray(ndis.preferred_event_types),
+        primary_disability_type: parseStringToArray(ndis.primary_disability_type),
+        support_requirements: parseStringToArray(ndis.support_requirements),
+        created_at: ndis.created_at,
+        updated_at: ndis.updated_at,
+      };
+    }
+
+
+     if (updatedUser.role === "NDIS Member") {
+        responseData = {
+        ...responseData,
+          ndis_information: ndisInfo,
+          };
+     }
+    if (updatedUser.role === "Company") {
+      responseData = {
+        ...responseData,
+        business_name: updatedUser.business_name,
+        business_category: updatedUser.business_category,
+        business_email: updatedUser.business_email,
+        business_phone_number: updatedUser.business_phone_number,
+        business_logo_url,
+        abn_number: updatedUser.abn_number,
+        ndis_registration_number: updatedUser.ndis_registration_number,
+        website_url: updatedUser.website_url,
+        year_experience: updatedUser.year_experience,
+        address: updatedUser.address,
+        business_overview: updatedUser.business_overview,
+        event_types: updatedUser.event_types,
+        accessibility: updatedUser.accessibility      
+      };
+    }
+
+    res.json({
+      status: true,
+      message: "Profile updated successfully",
+      data: responseData,
+    });
   } catch (err) {
-    console.error('Profile Update Error:', err.message);
-    res.status(500).json({ status: false, error: 'Failed to update profile' });
+    console.error("Profile Update Error:", err.message);
+    res.status(500).json({ status: false, error: "Failed to update profile" });
   }
 };
 
@@ -964,7 +972,8 @@ exports.getProfile = async (req, res) => {
   if (!user_id) return res.status(401).json({ error: 'Unauthorized' });
 
   try {
-    const result = await pool.query(
+    // Step 1: Fetch user
+    const userResult = await pool.query(
       `SELECT 
         id,
         full_name,
@@ -995,17 +1004,30 @@ exports.getProfile = async (req, res) => {
       [user_id]
     );
 
-    if (result.rows.length === 0) {
+    if (userResult.rows.length === 0) {
       return res.status(404).json({ error: 'User not found.' });
     }
 
+    const user = userResult.rows[0];
+
+    // Step 2: Fetch NDIS Information
+    const ndisResult = await pool.query(
+      `SELECT 
+        id,
+        ndis_number,
+        preferred_event_types,
+        primary_disability_type,
+        support_requirements,
+        created_at,
+        updated_at
+      FROM ndis_information 
+      WHERE user_id = $1`,
+      [user_id]
+    );
+
     const parseStringToArray = (value) => {
       if (!value) return [];
-
-      // If it's already an array (Postgres returns text[] as array)
       if (Array.isArray(value)) return value;
-
-      // If it's a string (like "{item1,item2}")
       if (typeof value === "string") {
         return value
           .replace(/[{}]/g, "")
@@ -1013,31 +1035,28 @@ exports.getProfile = async (req, res) => {
           .map((s) => s.trim().replace(/^"|"$/g, ""))
           .filter(Boolean);
       }
-
-      // Otherwise, return empty array
       return [];
     };
-    
-    const user = result.rows[0];
 
-    // Format date_of_birth
+    // Step 3: Format fields
     user.date_of_birth = user.date_of_birth
-      ? new Date(user.date_of_birth.getTime() + 5.5 * 60 * 60 * 1000) // adjust for timezone
+      ? new Date(user.date_of_birth.getTime() + 5.5 * 60 * 60 * 1000)
           .toISOString()
-          .split('T')[0]
+          .split("T")[0]
       : null;
 
-    // Attach profile image URL if exists
+    const BASE_IMAGE_URL = process.env.BASE_IMAGE_URL || "http://localhost:3000/uploads";
+
     user.profile_image_url = user.profile_image
       ? `${BASE_IMAGE_URL}/${user.profile_image}`
       : null;
 
-    // Only include company fields if role is Company
+    // Step 4: Company details (if role is Company)
     let companyDetails = null;
-    if (user.role === 'Company') {
+    if (user.role === "Company") {
       companyDetails = {
         business_name: user.business_name,
-        business_category: user.business_category,
+        business_category: parseStringToArray(user.business_category),
         business_email: user.business_email,
         business_phone_number: user.business_phone_number,
         business_logo_url: user.business_logo
@@ -1050,11 +1069,25 @@ exports.getProfile = async (req, res) => {
         address: user.address,
         business_overview: user.business_overview,
         event_types: parseStringToArray(user.event_types),
-        accessibility: parseStringToArray(user.accessibility)
+        accessibility: parseStringToArray(user.accessibility),
       };
     }
 
-    // Prepare final response
+    // Step 5: NDIS Information
+    let ndisInfo = null;
+    if (ndisResult.rows.length > 0) {
+      const ndis = ndisResult.rows[0];
+      ndisInfo = {
+        ndis_number: ndis.ndis_number,
+        preferred_event_types: parseStringToArray(ndis.preferred_event_types),
+        primary_disability_type: parseStringToArray(ndis.primary_disability_type),
+        support_requirements: parseStringToArray(ndis.support_requirements),
+        created_at: ndis.created_at,
+        updated_at: ndis.updated_at,
+      };
+    }
+
+    // Step 6: Final response
     const response = {
       id: user.id,
       full_name: user.full_name,
@@ -1067,13 +1100,14 @@ exports.getProfile = async (req, res) => {
       is_verified: user.is_verified,
       created_at: user.created_at,
       updated_at: user.updated_at,
-      business_details: companyDetails, // null if not Company
+      business_details: companyDetails, // Only if company
+      ndis_information: ndisInfo, // Null if no record found
     };
 
     res.json({ status: true, data: response });
   } catch (err) {
-    console.error('Get Profile Error:', err.message);
-    res.status(500).json({ status: false, error: 'Failed to fetch profile.' });
+    console.error("Get Profile Error:", err.message);
+    res.status(500).json({ status: false, error: "Failed to fetch profile." });
   }
 };
 
