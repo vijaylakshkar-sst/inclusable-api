@@ -16,6 +16,9 @@ exports.getUserBookings = async (req, res) => {
         ce.event_thumbnail,
         ce.start_date,
         ce.end_date,
+        ce.start_time,
+        ce.end_time,
+        ce.event_address,
         eb.company_id,
         u.business_name AS company_name,
         eb.event_price,
@@ -40,7 +43,7 @@ exports.getUserBookings = async (req, res) => {
         : null
     }));
 
-    res.json({ status: true, bookings });
+    res.json({ status: true, data:bookings });
   } catch (err) {
     console.error('Get User Bookings Error:', err.message);
     res.status(500).json({ status: false, error: 'Failed to fetch bookings' });
@@ -61,6 +64,8 @@ exports.getUserBookingById = async (req, res) => {
         ce.event_thumbnail,
         ce.start_date,
         ce.end_date,
+        ce.start_time,
+        ce.end_time,
         ce.event_address,
         ce.how_to_reach_destination,
         ce.event_description,

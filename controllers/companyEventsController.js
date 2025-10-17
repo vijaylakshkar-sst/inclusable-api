@@ -883,8 +883,10 @@ exports.createEventBooking = async (req, res) => {
     return res.status(201).json({
       status: true,
       message: 'Booking initiated. Complete payment to confirm.',
-      clientSecret: paymentIntent.client_secret,
-      bookingId: booking_id
+      data: {
+          clientSecret: paymentIntent.client_secret,
+          bookingId: booking_id
+        }
     });
 
   } catch (err) {
