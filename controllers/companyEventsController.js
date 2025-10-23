@@ -522,8 +522,13 @@ exports.getBookingsByCompany = async (req, res) => {
         eb.event_id,
         ce.event_name,
         ce.event_thumbnail,
+        ce.start_date,
+        ce.end_date,
+        ce.start_time,
+        ce.end_time,
         eb.user_id,
         u.full_name AS user_name,
+        u.profile_image AS user_image,
         u.email AS user_email,
         eb.event_price,
         eb.number_of_tickets,
@@ -543,6 +548,9 @@ exports.getBookingsByCompany = async (req, res) => {
       ...booking,
       event_thumbnail: booking.event_thumbnail
         ? `${BASE_EVENT_IMAGE_URL}/${booking.event_thumbnail}`
+        : null,
+      user_image: booking.user_image
+        ? `${BASE_IMAGE_URL}/${booking.user_image}`
         : null
     }));
 
@@ -567,6 +575,7 @@ exports.getBookingById = async (req, res) => {
         u.full_name AS user_name,
         u.email AS user_email,
         u.phone_number AS user_phone,
+        u.profile_image AS user_image,
 
         eb.company_id,
         c.business_name,
@@ -578,6 +587,8 @@ exports.getBookingById = async (req, res) => {
         ce.event_thumbnail,
         ce.start_date,
         ce.end_date,
+        ce.start_time,
+        ce.end_time,
 
         eb.event_price,
         eb.number_of_tickets,
@@ -604,6 +615,11 @@ exports.getBookingById = async (req, res) => {
     // Format event thumbnail URL
     booking.event_thumbnail = booking.event_thumbnail
       ? `${BASE_EVENT_IMAGE_URL}/${booking.event_thumbnail}`
+      : null;
+
+    // Format user image URL
+    booking.user_image = booking.user_image
+      ? `${BASE_IMAGE_URL}/${booking.user_image}`
       : null;
 
     res.json({

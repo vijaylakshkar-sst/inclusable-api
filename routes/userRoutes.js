@@ -20,9 +20,13 @@ router.put('/change-password', auth, userController.changePassword);
 
 router.put('/update-password', userController.updatePassword);
 
+router.delete('/delete-account', auth, userController.deleteUser);
+
 router.put('/company-profile/update', auth, uploadFiles, userController.updateProfile );
 
 router.put('/user-profile/update', auth, uploadFiles, userController.updateProfile );
+
+router.post("/stripe/create-bank-link", userController.createBankLink);
 
 
 module.exports = router; 

@@ -27,3 +27,30 @@ exports.getTermsConditions = async (req, res) => {
     res.status(500).json({ error: 'Failed to fetch terms & conditions' });
   }
 };
+
+exports.createSupportTicket = async (req, res) => {
+  const user_id = req.user?.userId; // optional if user is logged in
+  const { subject, message } = req.body;
+
+  if (!subject || !message) {
+    return res.status(400).json({ status: false, message: 'Subject and message are required' });
+  }
+
+  try {
+    const result = await pool.query(
+      `INSERT INTO support_tickets (user_id, subject, message)
+       VALUES ($1, $2, $3)
+       RETURNING *`,
+      [user_id || null, subject, message]
+    );
+
+    res.status(201).json({
+      status: true,
+      message: 'Support ticket submitted successfully',
+      data: result.rows[0],
+    });
+  } catch (err) {
+    console.error('Error creating support ticket:', err);
+    res.status(500).json({ status: false, message: 'Server error', error: err.message });
+  }
+};

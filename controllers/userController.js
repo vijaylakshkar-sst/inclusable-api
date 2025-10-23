@@ -6,6 +6,8 @@ const path = require('path');
 const jwt = require('jsonwebtoken');
 const { stat } = require('fs');
 const fs = require('fs');
+const stripe = require('../stripe');
+
 
 const templatePath = path.join(__dirname, '../emailTemplates/otpEmailTemplate.html');
 
@@ -318,8 +320,34 @@ exports.verifyEmail = async (req, res) => {
     }
     await pool.query('UPDATE users SET is_verified = TRUE, verification_code = NULL WHERE id = $1', [user.id]);
     
+    
     // Issue JWT after verification
     if(type === 'register'){
+
+      let stripeCustomerId = user.stripe_customer_id;
+
+      if(user.role === 'Company'){
+        if (!stripeCustomerId) {
+          const customer = await stripe.customers.create({
+            email: user.email,
+            name: user.full_name || '',
+            phone: user.phone_number || undefined,
+            metadata: {
+              user_id: user.id,
+              role: user.role,
+            },
+          });
+
+          stripeCustomerId = customer.id;
+
+          // Save Stripe customer ID in your DB
+          await pool.query('UPDATE users SET stripe_customer_id = $1 WHERE id = $2', [
+            stripeCustomerId,
+            user.id,
+          ]);
+        }
+      } 
+
       const token = jwt.sign({ userId: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
       res.json({
         status: true,
@@ -332,6 +360,7 @@ exports.verifyEmail = async (req, res) => {
           phone_number: user.phone_number,
           role: user.role,
           is_verified: true, // since just verified
+          stripe_customer_id: stripeCustomerId,
           profile_image_url: user.profile_image ? `${BASE_IMAGE_URL}/${user.profile_image}` : null,
           profile_image: user.profile_image,
           date_of_birth: user.date_of_birth,
@@ -1162,5 +1191,64 @@ exports.sendOTP = async (req, res) => {
   } catch (err) {
     console.error('Send OTP error:', err);
     res.status(500).json({ error: 'Internal server error.' });
+  }
+};
+
+
+exports.createBankLink = async (req, res) => {
+  try {
+    const { stripe_customer_id } = req.body;
+
+    if (!stripe_customer_id) {
+      return res.status(400).json({ error: "stripe_customer_id is required" });
+    }
+
+    // Create Financial Connections Session
+    const session = await stripe.financialConnections.sessions.create({
+      account_holder: {
+        type: "customer",
+        customer: stripe_customer_id,
+      },
+      permissions: ["payment_method", "balances"],
+      filters: { countries: ["US"] },
+    });
+
+    // Send session link to frontend
+    res.json({
+      success: true,
+      message: "Bank link generated successfully.",
+      data: {
+        session_url: session.url, // Stripe-hosted link
+        session_secret: session.client_secret,
+        session_id: session.id
+        }
+    });
+  } catch (error) {
+    console.error("Create bank link error:", error.message);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+exports.deleteUser = async (req, res) => {
+  const user_id = req.user?.userId;
+
+  if (!user_id) 
+    return res.status(401).json({ status: false, message: 'Unauthorized' });
+
+  try {
+    // Soft delete: set deleted_at to current timestamp
+    const result = await pool.query(
+      'UPDATE users SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL RETURNING *',
+      [user_id]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({ status: false, message: 'User not found or already deleted' });
+    }
+
+    res.json({ status: true, message: 'User deleted successfully' });
+  } catch (err) {
+    console.error('Error deleting user:', err);
+    res.status(500).json({ status: false, message: 'Server error', error: err.message });
   }
 };

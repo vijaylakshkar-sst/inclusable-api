@@ -5,6 +5,7 @@ ALTER TABLE users
 ADD COLUMN IF NOT EXISTS profile_image VARCHAR(255),
 ADD COLUMN IF NOT EXISTS date_of_birth DATE,
 ADD COLUMN IF NOT EXISTS gender VARCHAR(10);
+ADD COLUMN IF NOT EXISTS stripe_customer_id VARCHAR(255);
 `;
 
 (async () => {
