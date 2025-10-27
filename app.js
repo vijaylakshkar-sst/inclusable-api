@@ -18,6 +18,7 @@ const privacyPolicyRoutes = require('./routes/admin/privacyPolicyRoutes');
 const dashboardRoutes = require('./routes/admin/dashboardRoutes');
 const userAdminRoutes = require('./routes/admin/userRoutes');
 const cabTypeRoutes = require('./routes/admin/cabTypeRoutes');
+const supportTicketRoutes = require('./routes/admin/supportTicketRoutes');
 
 
 //================Driver API==============================
@@ -48,6 +49,7 @@ app.use('/api/v1/admin/privacy-policy', privacyPolicyRoutes);
 app.use('/api/v1/admin/dashboard', dashboardRoutes);
 app.use('/api/v1/admin/users', userAdminRoutes);
 app.use('/api/v1/admin/cab-types', cabTypeRoutes);
+app.use('/api/v1/admin/support-tickets', supportTicketRoutes);
 
 
 //================Driver API==============================

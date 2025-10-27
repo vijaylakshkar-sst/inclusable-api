@@ -445,7 +445,6 @@ exports.getEventById = async (req, res) => {
       JOIN users u ON eb.user_id = u.id
       WHERE eb.event_id = $1
       ORDER BY eb.created_at DESC
-      LIMIT 4
       `,
       [id]
     );
@@ -589,6 +588,7 @@ exports.getBookingById = async (req, res) => {
         ce.end_date,
         ce.start_time,
         ce.end_time,
+        ce.event_address,
 
         eb.event_price,
         eb.number_of_tickets,
