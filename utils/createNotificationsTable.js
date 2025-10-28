@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS notifications (
   title VARCHAR(255) NOT NULL,
   message TEXT NOT NULL,
   type VARCHAR(50) DEFAULT 'system', -- e.g., booking, status, cancellation
-  target VARCHAR(20) NOT NULL CHECK (target IN ('user', 'driver','company')),
+  target VARCHAR(20) NOT NULL CHECK (target IN ('NDIS Member', 'Driver','Company')),
   is_read BOOLEAN DEFAULT false,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

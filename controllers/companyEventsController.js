@@ -3,6 +3,7 @@ const { eventCreateSchema, eventUpdateSchema } = require('../validators/companyE
 const stripe = require('../stripe');
 const BASE_EVENT_IMAGE_URL = process.env.BASE_EVENT_IMAGE_URL;
 const BASE_IMAGE_URL = process.env.BASE_IMAGE_URL;
+const { sendNotification } = require("../hooks/notification");
 
 exports.createCompanyEvent = async (req, res) => {
 
@@ -91,6 +92,34 @@ exports.createCompanyEvent = async (req, res) => {
     ];
 
     const result = await pool.query(query, values);
+  
+   
+  
+    const data = result.rows[0];
+   
+
+     const userData = await pool.query(
+      'SELECT * FROM users WHERE id = $1',
+      [user_id]
+    );
+
+    const user = userData.rows[0];    
+    
+    const dynamicData = {
+      title: "New Event Created!",
+      body: `${user.business_name} just create event ${event_name}.`,
+      type: "Event",
+      id: data.id
+    };
+   
+      await sendNotification({
+        title: dynamicData.title,
+        message: dynamicData.body,
+        type: dynamicData.type,
+        target: 'NDIS Member',
+        id: data.id,
+      });
+   
 
     res.status(201).json({
       message: 'Event created successfully.',
@@ -419,6 +448,26 @@ exports.getEventById = async (req, res) => {
       address: event.business_address,
       business_overview: event.business_overview,
     };
+
+    const Feesquery = `
+      SELECT 
+        id, 
+        service_type,
+        company_fee,
+        driver_fee,
+        member_fee,
+        platform_fee,
+        fee_type,
+        updated_at
+      FROM platform_fees
+      WHERE service_type = 'Event Booking'
+      ORDER BY updated_at DESC
+      LIMIT 1
+    `;
+
+    const { rows } = await pool.query(Feesquery);
+
+    event.platform_fees = rows[0].platform_fee;
 
     // Remove company fields from event object
     const {

@@ -297,7 +297,7 @@ exports.updateBusinessDetails = async (req, res) => {
 };
 
 exports.verifyEmail = async (req, res) => {
-  const { email, code, type } = req.body;
+  const { email, code, type, fcm_token } = req.body;
   if (!email || !code) {
     return res.status(400).json({ error: 'Email and code are required.' });
   }
@@ -325,6 +325,10 @@ exports.verifyEmail = async (req, res) => {
     if(type === 'register'){
 
       let stripeCustomerId = user.stripe_customer_id;
+
+       if (fcm_token && fcm_token.trim() !== '') {
+          await pool.query('UPDATE users SET fcm_token = $1 WHERE id = $2', [fcm_token, user.id]);
+        }
 
       if(user.role === 'Company'){
         if (!stripeCustomerId) {
@@ -485,7 +489,8 @@ exports.addAdditionalDetails = async (req, res) => {
 };
 
 exports.login = async (req, res) => {
-  const { email, password } = req.body;
+
+  const { email, password,fcm_token } = req.body;
   
   // New comprehensive validation
   if (!email || !password) {
@@ -518,6 +523,13 @@ exports.login = async (req, res) => {
     // Issue JWT
     const token = jwt.sign({ userId: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
     // res.json({ token });
+
+      // ✅ Update FCM token if provided
+    if (fcm_token && fcm_token.trim() !== '') {
+      await pool.query('UPDATE users SET fcm_token = $1 WHERE id = $2', [fcm_token, user.id]);
+      console.log(`✅ FCM token updated for user ID: ${user.id}`);
+    }
+
 
     const userId = user.id;
 
@@ -590,7 +602,8 @@ exports.login = async (req, res) => {
       date_of_birth: user.date_of_birth,
       gender: user.gender,
       created_at: user.created_at,
-      updated_at: user.updated_at
+      updated_at: user.updated_at,
+      fcm_token: fcm_token
     };
 
     // ✅ If company, add business details
@@ -1250,5 +1263,61 @@ exports.deleteUser = async (req, res) => {
   } catch (err) {
     console.error('Error deleting user:', err);
     res.status(500).json({ status: false, message: 'Server error', error: err.message });
+  }
+};
+
+
+exports.getNotifications = async (req, res) => {
+  const { user_id, driver_id, target, is_read } = req.query;
+
+  try {
+    // Base query
+    let query = `
+      SELECT n.*, 
+             u.full_name AS user_name
+      FROM notifications n
+      LEFT JOIN users u ON n.user_id = u.id
+      WHERE 1=1
+    `;
+    const values = [];
+
+    // Apply filters dynamically
+    if (user_id) {
+      values.push(user_id);
+      query += ` AND n.user_id = $${values.length}`;
+    }
+
+    if (driver_id) {
+      values.push(driver_id);
+      query += ` AND n.driver_id = $${values.length}`;
+    }
+
+    if (target) {
+      values.push(target);
+      query += ` AND n.target = $${values.length}`;
+    }
+
+    if (is_read !== undefined) {
+      values.push(is_read === "true"); // Convert to boolean
+      query += ` AND n.is_read = $${values.length}`;
+    }
+
+    query += ` ORDER BY n.created_at DESC`;
+
+    const { rows } = await pool.query(query, values);
+
+    res.status(200).json({
+      status: true,
+      message: "Notifications fetched successfully",
+      count: rows.length,
+      data: rows,
+    });
+  } catch (err) {
+    console.error("❌ Error fetching notifications:", err.message);
+    res.status(500).json({
+      status: false,
+      message: "Error fetching notifications",
+      error: err.message,
+    });
   }
 };

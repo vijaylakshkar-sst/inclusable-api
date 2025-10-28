@@ -11,6 +11,7 @@ router.post('/login', userController.login);
 router.post('/logout', userController.logout);
 router.post('/users/additional-details', auth, uploadFiles, userController.addAdditionalDetails);
 router.get('/users/onboarding-status', auth, userController.checkOnboardingCompletion);
+router.get('/users/notifications', auth, userController.getNotifications);
 router.post('/send-otp', userController.sendOTP);
 
 
