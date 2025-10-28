@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS notifications (
   user_id INT REFERENCES users(id) ON DELETE CASCADE,
   driver_id INT NULL REFERENCES drivers(id) ON DELETE CASCADE,
   booking_id INT, -- can refer to cab_bookings or event_bookings
+  company_event_id INT REFERENCES company_events(id) ON DELETE CASCADE,
   title VARCHAR(255) NOT NULL,
   message TEXT NOT NULL,
   type VARCHAR(50) DEFAULT 'system', -- e.g., booking, status, cancellation

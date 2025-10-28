@@ -3,7 +3,7 @@ const { eventCreateSchema, eventUpdateSchema } = require('../validators/companyE
 const stripe = require('../stripe');
 const BASE_EVENT_IMAGE_URL = process.env.BASE_EVENT_IMAGE_URL;
 const BASE_IMAGE_URL = process.env.BASE_IMAGE_URL;
-const { sendNotification } = require("../hooks/notification");
+const { sendNotification,sendNotificationToBusiness } = require("../hooks/notification");
 
 exports.createCompanyEvent = async (req, res) => {
 
@@ -37,10 +37,10 @@ exports.createCompanyEvent = async (req, res) => {
   }
 
   const thumbnail = req.files['event_thumbnail']?.[0]?.filename || null;
-    const eventImages = req.files['event_images']?.map(file => file.filename) || [];
+  const eventImages = req.files['event_images']?.map(file => file.filename) || [];
 
   try {
-    
+
 
     const query = `
       INSERT INTO company_events (
@@ -59,21 +59,21 @@ exports.createCompanyEvent = async (req, res) => {
     `;
 
     const parseArray = (input) => {
-    if (!input) return null;
-    try {
-      const parsed = JSON.parse(input);
-      return Array.isArray(parsed) ? parsed : [parsed];
-    } catch {
-      return input.split(',').map(s => s.trim());
-    }
-  };
+      if (!input) return null;
+      try {
+        const parsed = JSON.parse(input);
+        return Array.isArray(parsed) ? parsed : [parsed];
+      } catch {
+        return input.split(',').map(s => s.trim());
+      }
+    };
 
 
     const values = [
       user_id,
       event_name,
       event_types ? parseArray(event_types) : null,
-      disability_types ? parseArray(disability_types)  : null,
+      disability_types ? parseArray(disability_types) : null,
       accessibility_types ? parseArray(accessibility_types) : null,
       event_description,
       thumbnail,
@@ -92,34 +92,30 @@ exports.createCompanyEvent = async (req, res) => {
     ];
 
     const result = await pool.query(query, values);
-  
-   
-  
     const data = result.rows[0];
-   
 
-     const userData = await pool.query(
+    const userData = await pool.query(
       'SELECT * FROM users WHERE id = $1',
       [user_id]
     );
 
-    const user = userData.rows[0];    
-    
+    const user = userData.rows[0];
+
     const dynamicData = {
       title: "New Event Created!",
       body: `${user.business_name} just create event ${event_name}.`,
       type: "Event",
       id: data.id
     };
-   
-      await sendNotification({
-        title: dynamicData.title,
-        message: dynamicData.body,
-        type: dynamicData.type,
-        target: 'NDIS Member',
-        id: data.id,
-      });
-   
+
+    await sendNotification({
+      title: dynamicData.title,
+      message: dynamicData.body,
+      type: dynamicData.type,
+      target: 'NDIS Member',
+      id: data.id,
+    });
+
 
     res.status(201).json({
       message: 'Event created successfully.',
@@ -167,14 +163,14 @@ exports.updateCompanyEvent = async (req, res) => {
       'event_name', 'event_types', 'disability_types', 'accessibility_types',
       'event_description', 'start_date', 'end_date', 'start_time', 'end_time',
       'price_type', 'price', 'total_available_seats',
-      'event_address', 'how_to_reach_destination','latitude','longitude'
+      'event_address', 'how_to_reach_destination', 'latitude', 'longitude'
     ];
 
     const updates = [];
     const values = [];
     let index = 1;
 
-     const parseArray = (input) => {
+    const parseArray = (input) => {
       if (!input) return null;
       try {
         const parsed = JSON.parse(input);
@@ -199,7 +195,7 @@ exports.updateCompanyEvent = async (req, res) => {
       index++;
     }
 
-    
+
 
     // Add image fields
     updates.push(`event_thumbnail = $${index}`);
@@ -339,8 +335,8 @@ exports.getCompanyEvents = async (req, res) => {
   // Pagination
   // const offset = (page - 1) * limit;
   values.push(safeLimit);  // LIMIT
-  values.push(offset); 
-  query += ` LIMIT $${values.length - 1} OFFSET $${values.length}`; 
+  values.push(offset);
+  query += ` LIMIT $${values.length - 1} OFFSET $${values.length}`;
 
   try {
     const result = await pool.query(query, values);
@@ -399,7 +395,7 @@ exports.getEventById = async (req, res) => {
     const event = result.rows[0];
 
     // ✅ Safely parse event_types, disability_types, accessibility_types
-     const parseStringToArray = (value) => {
+    const parseStringToArray = (value) => {
       if (!value) return [];
 
       // If it's already an array (Postgres returns text[] as array)
@@ -943,15 +939,50 @@ exports.createEventBooking = async (req, res) => {
       ]
     );
 
+    const userData = await pool.query(
+      'SELECT * FROM users WHERE id = $1',
+      [user_id]
+    );
+    const user = userData.rows[0];
+
+    // Fetch event + business info
+    const eventData = await pool.query(
+      `SELECT id, event_name, user_id AS business_user_id
+      FROM company_events WHERE id = $1`,
+      [event_id]
+    );
+    const event = eventData.rows[0];
+
+    if (event) {
+      const dynamicData = {
+        title: "New Booking Received!",
+        body: `${user.full_name} just booked ${event.event_name}.`,
+        type: "Booking",
+        target: "Company",
+        id: String(event.id),
+        booking_id: String(booking_id),
+      };
+
+      await sendNotificationToBusiness({
+        businessUserId: event.business_user_id,
+        title: dynamicData.title,
+        message: dynamicData.body,
+        type: dynamicData.type,
+        target: dynamicData.target,
+        id: dynamicData.id,
+        booking_id: dynamicData.booking_id
+      });
+    }
+
     await client.query('COMMIT');
 
     return res.status(201).json({
       status: true,
       message: 'Booking initiated. Complete payment to confirm.',
       data: {
-          clientSecret: paymentIntent.client_secret,
-          bookingId: booking_id
-        }
+        clientSecret: paymentIntent.client_secret,
+        bookingId: booking_id
+      }
     });
 
   } catch (err) {
