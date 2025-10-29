@@ -628,6 +628,7 @@ exports.getBookingById = async (req, res) => {
 
         eb.event_id,
         ce.event_name,
+        ce.price_type,
         ce.event_thumbnail,
         ce.start_date,
         ce.end_date,
@@ -636,6 +637,7 @@ exports.getBookingById = async (req, res) => {
         ce.event_address,
 
         eb.event_price,
+        eb.platform_fee,
         eb.number_of_tickets,
         eb.total_amount,
         eb.status,
@@ -667,6 +669,8 @@ exports.getBookingById = async (req, res) => {
       ? `${BASE_IMAGE_URL}/${booking.user_image}`
       : null;
 
+      console.log(booking,'data');
+      
     res.json({
       status: true,
       data: booking
@@ -856,25 +860,17 @@ exports.createEventBooking = async (req, res) => {
   const {
     company_id,
     event_id,
-    event_price,
+    event_price = 0.00,
     number_of_tickets,
-    total_amount,
+    total_amount = 0.00,
     attendee_info // [{ name, email }]
   } = req.body;
 
   // Basic validation
-  if (!user_id || !event_id || !company_id || !number_of_tickets || !total_amount) {
-    return res.status(400).json({ status: false, error: 'Missing required fields' });
-  }
-
-  // Optional: Validate number of attendees
-  if (attendee_info && attendee_info.length !== number_of_tickets) {
-    return res.status(400).json({ status: false, error: 'Attendee count mismatch with number_of_tickets' });
-  }
 
   // Check if event exists and belongs to company
   const eventCheck = await pool.query(
-    'SELECT id FROM company_events WHERE id = $1 AND user_id = $2',
+    'SELECT id,price_type FROM company_events WHERE id = $1 AND user_id = $2',
     [event_id, company_id]
   );
 
@@ -885,6 +881,33 @@ exports.createEventBooking = async (req, res) => {
     });
   }
 
+   const eventDataCheck = eventCheck.rows[0];
+
+  if(eventDataCheck.price_type === 'Paid'){
+    if (!user_id || !event_id || !company_id || !number_of_tickets || !total_amount) {
+        return res.status(400).json({ status: false, error: 'Missing required fields' });
+      }
+  }else{
+
+     if (!user_id || !event_id || !company_id || !number_of_tickets) {
+        return res.status(400).json({ status: false, error: 'Missing required fields' });
+      }
+  }
+
+
+ 
+  
+
+  // Optional: Validate number of attendees
+  if (attendee_info && attendee_info.length !== number_of_tickets) {
+    return res.status(400).json({ status: false, error: 'Attendee count mismatch with number_of_tickets' });
+  }
+
+  
+ 
+  console.log('✅ Event found:', eventDataCheck.price_type );
+  
+
   const client = await pool.connect();
 
   try {
@@ -894,11 +917,31 @@ exports.createEventBooking = async (req, res) => {
     const bookingInsertQuery = `
       INSERT INTO event_bookings (
         user_id, company_id, event_id, event_price, number_of_tickets,
-        total_amount, attendee_info, status
+        total_amount, attendee_info, status, platform_fee
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending')
+      VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', $8)
       RETURNING id
     `;
+
+    const Feesquery = `
+      SELECT 
+        id, 
+        service_type,
+        company_fee,
+        driver_fee,
+        member_fee,
+        platform_fee,
+        fee_type,
+        updated_at
+      FROM platform_fees
+      WHERE service_type = 'Event Booking'
+      ORDER BY updated_at DESC
+      LIMIT 1
+    `;
+
+    const { rows } = await pool.query(Feesquery);  
+
+    const platform_fee = eventDataCheck.price_type === 'Free' ? 0.00 : rows[0].platform_fee;
 
     const bookingValues = [
       user_id,
@@ -907,37 +950,43 @@ exports.createEventBooking = async (req, res) => {
       event_price || null,
       number_of_tickets,
       total_amount,
-      JSON.stringify(attendee_info || [])
+      JSON.stringify(attendee_info || []),
+      platform_fee
     ];
 
     const bookingResult = await client.query(bookingInsertQuery, bookingValues);
     const booking_id = bookingResult.rows[0].id;
 
+    let paymentIntent=null;
     // 2. Create Stripe PaymentIntent (AUD)
-    const paymentIntent = await stripe.paymentIntents.create({
-      amount: Math.round(total_amount * 100), // Convert to cents
-      currency: 'aud',
-      metadata: {
-        booking_id: booking_id,
-        user_id: user_id,
-        event_id: event_id,
-      },
-    });
+    if (eventDataCheck.price_type === 'Paid') {
+         paymentIntent = await stripe.paymentIntents.create({
+          amount: Math.round(total_amount * 100), // Convert to cents
+          currency: 'aud',
+          metadata: {
+            booking_id: booking_id,
+            user_id: user_id,
+            event_id: event_id,
+          },
+        });   
+          // 3. Insert into transactions table
+        await client.query(
+          `INSERT INTO transactions (booking_id, user_id, event_id, payment_intent_id, amount, currency, status)
+          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [
+            booking_id,
+            user_id,
+            event_id,
+            paymentIntent ? paymentIntent.id : null,
+            total_amount,
+            'aud',
+            'pending'
+          ]
+        );    
+    }
 
-    // 3. Insert into transactions table
-    await client.query(
-      `INSERT INTO transactions (booking_id, user_id, event_id, payment_intent_id, amount, currency, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [
-        booking_id,
-        user_id,
-        event_id,
-        paymentIntent.id,
-        total_amount,
-        'aud',
-        'pending'
-      ]
-    );
+   
+ 
 
     const userData = await pool.query(
       'SELECT * FROM users WHERE id = $1',
@@ -978,9 +1027,9 @@ exports.createEventBooking = async (req, res) => {
 
     return res.status(201).json({
       status: true,
-      message: 'Booking initiated. Complete payment to confirm.',
+      message: eventDataCheck.price_type === 'Paid' ? 'Booking initiated. Complete payment to confirm.' : 'Booking succefully created.',
       data: {
-        clientSecret: paymentIntent.client_secret,
+        clientSecret: paymentIntent ? paymentIntent.client_secret : null,
         bookingId: booking_id
       }
     });

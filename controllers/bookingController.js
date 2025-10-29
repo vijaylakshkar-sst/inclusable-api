@@ -67,6 +67,7 @@ exports.getUserBookingById = async (req, res) => {
         ce.start_time,
         ce.end_time,
         ce.event_address,
+        ce.price_type,
         ce.how_to_reach_destination,
         ce.event_description,
         u.business_name AS company_name
