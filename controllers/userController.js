@@ -330,27 +330,29 @@ exports.verifyEmail = async (req, res) => {
           await pool.query('UPDATE users SET fcm_token = $1 WHERE id = $2', [fcm_token, user.id]);
         }
 
-      if(user.role === 'Company'){
-        if (!stripeCustomerId) {
-          const customer = await stripe.customers.create({
+      if (user.role === 'Company') {
+        if (!user.stripe_account_id) {
+          // Create a connected account for payouts
+          const account = await stripe.accounts.create({
+            type: 'express', // or 'standard'
             email: user.email,
-            name: user.full_name || '',
-            phone: user.phone_number || undefined,
+            business_type: 'individual', // or 'company'
+            capabilities: {
+              transfers: { requested: true },
+            },
             metadata: {
               user_id: user.id,
               role: user.role,
             },
           });
 
-          stripeCustomerId = customer.id;
-
-          // Save Stripe customer ID in your DB
-          await pool.query('UPDATE users SET stripe_customer_id = $1 WHERE id = $2', [
-            stripeCustomerId,
+          // Save account ID in DB
+          await pool.query('UPDATE users SET stripe_account_id = $1 WHERE id = $2', [
+            account.id,
             user.id,
           ]);
         }
-      } 
+      }
 
       const token = jwt.sign({ userId: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
       res.json({
@@ -508,10 +510,14 @@ exports.login = async (req, res) => {
     return res.status(400).json({ error: 'Password is required.' });
   }
   try {
-    const userResData = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
-    if (userResData.rows.length === 0) {
-      return res.status(404).json({ error: 'User not found.' });
-    }
+   const userResData = await pool.query(
+    'SELECT * FROM users WHERE email = $1 AND deleted_at IS NULL',
+    [email]
+  );
+
+  if (userResData.rows.length === 0) {
+    return res.status(404).json({ error: 'User not found or deleted.' });
+  }
     const user = userResData.rows[0];
     if (!user.is_verified) {
       return res.status(403).json({ error: 'Email not verified.' });

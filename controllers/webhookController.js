@@ -32,7 +32,7 @@ exports.handleStripeWebhook = async (req, res) => {
       // 2. Update event_bookings table
       await client.query(`
         UPDATE event_bookings 
-        SET payment_status = 'paid', status = 'confirmed' 
+        SET status = 'confirmed' 
         WHERE id = (SELECT booking_id FROM transactions WHERE payment_intent_id = $1)
       `, [paymentIntentId]);
 

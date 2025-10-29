@@ -28,6 +28,7 @@ const driverRoutes = require('./routes/driverRoutes');
 const app = express();
 
 app.use(cors());
+app.use('/api/v1', webhookRoutes);
 app.use(express.json());
 
 app.use('/api/v1', eventRoutes);
@@ -36,7 +37,7 @@ app.use('/api/v1', ndisRoutes);
 app.use('/api/v1', locationAccessibilityRoutes);
 app.use('/api/v1', bookingRoutes);
 app.use('/api/v1', legalContentRoutes);
-app.use('/api/v1', webhookRoutes);
+
 app.use('/api/v1', userCanBookRoutes);
 
 app.use('/api/v1', companyEventsRoutes);

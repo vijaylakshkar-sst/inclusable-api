@@ -284,74 +284,99 @@ exports.deleteCompanyEventImage = async (req, res) => {
 
 exports.getCompanyEvents = async (req, res) => {
   const user_id = req.user?.userId;
-  const { search, type, state, company_id, upcoming, page = 1, limit = 20 } = req.query;
+  const {
+    search,
+    type,
+    location,
+    upcoming,
+    lat,
+    lng,
+    radius,
+    page = 1,
+    limit = 20,
+  } = req.query;
 
   const parsedLimit = parseInt(limit, 10);
   const parsedPage = parseInt(page, 10);
-
-  // Fallbacks
   const safeLimit = !isNaN(parsedLimit) && parsedLimit > 0 ? parsedLimit : 20;
   const safePage = !isNaN(parsedPage) && parsedPage > 0 ? parsedPage : 1;
   const offset = (safePage - 1) * safeLimit;
 
-  let query = `SELECT * FROM company_events WHERE is_deleted = FALSE`;
+  let query = `SELECT *, 
+    (6371 * acos(
+      cos(radians($1)) * cos(radians(latitude)) *
+      cos(radians(longitude) - radians($2)) +
+      sin(radians($1)) * sin(radians(latitude))
+    )) AS distance
+    FROM company_events
+    WHERE is_deleted = FALSE`;
+
   const values = [];
+  let paramIndex = 3; // because $1 and $2 are used for lat/lng
+
+  // Add lat/lng base values (even if radius is not used)
+  const userLat = parseFloat(lat);
+  const userLng = parseFloat(lng);
+  values.push(userLat || 0);
+  values.push(userLng || 0);
 
   if (search) {
     values.push(`%${search}%`);
-    query += ` AND event_name ILIKE $${values.length}`;
+    query += ` AND event_name ILIKE $${paramIndex++}`;
   }
 
   if (type) {
     values.push(type);
-    query += ` AND $${values.length} = ANY(event_types)`;
+    query += ` AND $${paramIndex++} = ANY(event_types)`;
   }
 
-  if (state) {
-    values.push(`%${state}%`);
-    query += ` AND event_address ILIKE $${values.length}`;
+  if (location) {
+    values.push(`%${location}%`);
+    query += ` AND event_address ILIKE $${paramIndex++}`;
   }
-
-  // if (company_id && company_id !== '') {
-  //   const parsedCompanyId = parseInt(company_id, 10);
-  //   if (!isNaN(parsedCompanyId)) {
-  //     values.push(parsedCompanyId);
-  //     query += ` AND user_id = $${values.length}`;
-  //   }
-  // }
 
   if (user_id) {
     values.push(user_id);
-    query += ` AND user_id = $${values.length}`;
+    query += ` AND user_id = $${paramIndex++}`;
   }
 
   if (upcoming === 'true') {
-    values.push(new Date()); // current date-time
-    query += ` AND start_date >= $${values.length}`;
+    values.push(new Date());
+    query += ` AND start_date >= $${paramIndex++}`;
+  }
+
+  // 🔥 Radius filter (if lat/lng/radius provided)
+  if (lat && lng && radius) {
+    const radiusKm = parseFloat(radius);
+    if (!isNaN(radiusKm)) {
+      values.push(radiusKm);
+      query += ` AND (6371 * acos(
+        cos(radians($1)) * cos(radians(latitude)) *
+        cos(radians(longitude) - radians($2)) +
+        sin(radians($1)) * sin(radians(latitude))
+      )) <= $${paramIndex++}`;
+    }
   }
 
   query += ` ORDER BY start_date ASC`;
 
-  // Pagination
-  // const offset = (page - 1) * limit;
-  values.push(safeLimit);  // LIMIT
+  values.push(safeLimit);
   values.push(offset);
-  query += ` LIMIT $${values.length - 1} OFFSET $${values.length}`;
+  query += ` LIMIT $${paramIndex++} OFFSET $${paramIndex++}`;
 
   try {
     const result = await pool.query(query, values);
 
-    const events = result.rows.map(event => {
-      return {
-        ...event,
-        event_thumbnail: event.event_thumbnail
-          ? `${BASE_EVENT_IMAGE_URL}/${event.event_thumbnail}`
-          : null,
-        event_images: Array.isArray(event.event_images)
-          ? event.event_images.map(img => `${BASE_EVENT_IMAGE_URL}/${img}`)
-          : []
-      };
-    });
+    const events = result.rows.map(event => ({
+      ...event,
+      event_thumbnail: event.event_thumbnail
+        ? `${BASE_EVENT_IMAGE_URL}/${event.event_thumbnail}`
+        : null,
+      event_images: Array.isArray(event.event_images)
+        ? event.event_images.map(img => `${BASE_EVENT_IMAGE_URL}/${img}`)
+        : [],
+      distance: event.distance ? parseFloat(event.distance.toFixed(2)) : null
+    }));
 
     res.json({ status: true, data: events });
   } catch (err) {
