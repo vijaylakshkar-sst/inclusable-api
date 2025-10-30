@@ -419,14 +419,10 @@ exports.getEventById = async (req, res) => {
 
     const event = result.rows[0];
 
-    // ✅ Safely parse event_types, disability_types, accessibility_types
+    // ✅ Safely parse arrays
     const parseStringToArray = (value) => {
       if (!value) return [];
-
-      // If it's already an array (Postgres returns text[] as array)
       if (Array.isArray(value)) return value;
-
-      // If it's a string (like "{item1,item2}")
       if (typeof value === "string") {
         return value
           .replace(/[{}]/g, "")
@@ -434,8 +430,6 @@ exports.getEventById = async (req, res) => {
           .map((s) => s.trim().replace(/^"|"$/g, ""))
           .filter(Boolean);
       }
-
-      // Otherwise, return empty array
       return [];
     };
 
@@ -443,16 +437,16 @@ exports.getEventById = async (req, res) => {
     event.disability_types = parseStringToArray(event.disability_types);
     event.accessibility_types = parseStringToArray(event.accessibility_types);
 
-    // Format image URLs
+    // ✅ Format image URLs
     event.event_thumbnail = event.event_thumbnail
       ? `${BASE_EVENT_IMAGE_URL}/${event.event_thumbnail}`
       : null;
 
     event.event_images = Array.isArray(event.event_images)
-      ? event.event_images.map(img => `${BASE_EVENT_IMAGE_URL}/${img}`)
+      ? event.event_images.map((img) => `${BASE_EVENT_IMAGE_URL}/${img}`)
       : [];
 
-    // Business object
+    // ✅ Business info
     const company = {
       id: event.company_id,
       business_name: event.business_name,
@@ -470,6 +464,7 @@ exports.getEventById = async (req, res) => {
       business_overview: event.business_overview,
     };
 
+    // ✅ Platform fees
     const Feesquery = `
       SELECT 
         id, 
@@ -488,9 +483,10 @@ exports.getEventById = async (req, res) => {
 
     const { rows } = await pool.query(Feesquery);
 
-    event.platform_fees = rows[0].platform_fee;
+    event.platform_fees = rows[0]?.platform_fee || 0;
+    event.company_fees = rows[0]?.company_fee || 0;
 
-    // Remove company fields from event object
+    // ✅ Remove company fields from event
     const {
       company_id,
       business_name,
@@ -507,31 +503,44 @@ exports.getEventById = async (req, res) => {
       ...cleanEvent
     } = event;
 
-    // --- Fetch bookings ---
+    // ✅ Fetch only confirmed bookings
     const bookingsResult = await pool.query(
       `
-      SELECT eb.id, eb.user_id, u.full_name, u.email, u.phone_number, eb.number_of_tickets, eb.total_amount, u.profile_image
+      SELECT 
+        eb.id, 
+        eb.user_id, 
+        u.full_name, 
+        u.email, 
+        u.phone_number, 
+        eb.number_of_tickets, 
+        eb.total_amount, 
+        u.profile_image
       FROM event_bookings eb
       JOIN users u ON eb.user_id = u.id
-      WHERE eb.event_id = $1
+      WHERE eb.event_id = $1 
+        AND eb.status = 'confirmed'  -- ✅ Only confirmed bookings
       ORDER BY eb.created_at DESC
       `,
       [id]
     );
 
+    // ✅ Total confirmed bookings
     const totalBookingsResult = await pool.query(
-      `SELECT COUNT(*) AS total_bookings FROM event_bookings WHERE event_id = $1`,
+      `SELECT COUNT(*) AS total_bookings FROM event_bookings WHERE event_id = $1 AND status = 'confirmed'`,
       [id]
     );
 
     const totalBookings = parseInt(totalBookingsResult.rows[0].total_bookings, 10);
-    const latestBookings = bookingsResult.rows.map(user => ({
+
+    // ✅ Format booking user data
+    const latestBookings = bookingsResult.rows.map((user) => ({
       ...user,
       profile_image_url: user.profile_image
         ? `${BASE_IMAGE_URL}/${user.profile_image}`
         : null,
     }));
 
+    // ✅ Final response
     res.json({
       status: true,
       data: {
@@ -619,21 +628,23 @@ exports.getBookingsByCompany = async (req, res) => {
   if (!company_id) return res.status(401).json({ error: 'Unauthorized' });
 
   try {
-    // Filters
     const { status, search, start_date, end_date, page = 1, limit = 50 } = req.query;
     const offset = (page - 1) * limit;
 
-    // Base query
+    // Base WHERE clause
     let whereClause = `WHERE eb.company_id = $1`;
     const queryParams = [company_id];
     let paramIndex = 2;
 
-    // Add filters dynamically
+    // ✅ Force confirmed bookings only (if no status filter passed)
     if (status) {
       whereClause += ` AND eb.status = $${paramIndex++}`;
       queryParams.push(status);
+    } else {
+      whereClause += ` AND eb.status = 'confirmed'`;
     }
 
+    // ✅ Optional search filter
     if (search) {
       whereClause += ` AND (
         LOWER(u.full_name) LIKE LOWER($${paramIndex})
@@ -644,12 +655,13 @@ exports.getBookingsByCompany = async (req, res) => {
       paramIndex++;
     }
 
+    // ✅ Date range filter
     if (start_date && end_date) {
       whereClause += ` AND eb.created_at BETWEEN $${paramIndex++} AND $${paramIndex++}`;
       queryParams.push(start_date, end_date);
     }
 
-    // Total count query (for pagination)
+    // ✅ Total count for pagination
     const countQuery = `
       SELECT COUNT(*) AS total
       FROM event_bookings eb
@@ -658,10 +670,10 @@ exports.getBookingsByCompany = async (req, res) => {
       ${whereClause}
     `;
     const countResult = await pool.query(countQuery, queryParams);
-    const total = parseInt(countResult.rows[0].total);
+    const total = parseInt(countResult.rows[0].total, 10);
     const totalPages = Math.ceil(total / limit);
 
-    // Main data query
+    // ✅ Main data query
     const query = `
       SELECT 
         eb.id AS booking_id,
@@ -692,14 +704,15 @@ exports.getBookingsByCompany = async (req, res) => {
 
     const result = await pool.query(query, queryParams);
 
-    const bookings = result.rows.map(booking => ({
+    // ✅ Format image URLs
+    const bookings = result.rows.map((booking) => ({
       ...booking,
       event_thumbnail: booking.event_thumbnail
         ? `${BASE_EVENT_IMAGE_URL}/${booking.event_thumbnail}`
         : null,
       user_image: booking.user_image
         ? `${BASE_IMAGE_URL}/${booking.user_image}`
-        : null
+        : null,
     }));
 
     res.json({
@@ -708,7 +721,7 @@ exports.getBookingsByCompany = async (req, res) => {
       totalPages,
       totalRecords: total,
       limit: parseInt(limit),
-      data: bookings
+      data: bookings,
     });
   } catch (err) {
     console.error('Company Bookings Error:', err.message);
@@ -847,6 +860,7 @@ exports.getEvents = async (req, res) => {
     FROM company_events e
     JOIN users u ON e.user_id = u.id
     WHERE e.is_deleted = FALSE
+      AND (e.start_date + e.start_time::interval) >= NOW()
   `;
 
   // 🔍 Search by event name
@@ -900,7 +914,7 @@ exports.getEvents = async (req, res) => {
   if (lat && lng) {
     query += ` ORDER BY distance_km ASC`;
   } else {
-    query += ` ORDER BY e.start_date DESC`;
+    query += ` ORDER BY e.start_date ASC, e.start_time ASC`;
   }
 
   // 📄 Pagination
@@ -959,9 +973,6 @@ exports.getEvents = async (req, res) => {
 
     res.json({
       status: true,
-      // total: result.rowCount,
-      // page: safePage,
-      // limit: safeLimit,
       data: events,
     });
   } catch (err) {
@@ -969,6 +980,7 @@ exports.getEvents = async (req, res) => {
     res.status(500).json({ status: false, error: 'Failed to fetch events' });
   }
 };
+
 
 exports.createEventBooking = async (req, res) => {
   const user_id = req.user?.userId;
