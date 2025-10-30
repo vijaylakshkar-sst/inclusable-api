@@ -36,9 +36,17 @@ exports.sendNotification = async ({
     console.log('🚀 Fetching all user FCM tokens...');
 
     // Step 1️⃣: Get all user FCM tokens
-    const fcmResult = await client.query(`
-      SELECT id, fcm_token FROM users WHERE fcm_token IS NOT NULL AND fcm_token <> ''
-    `);
+    const fcmResult = await client.query(
+        `
+        SELECT id, fcm_token 
+        FROM users 
+        WHERE fcm_token IS NOT NULL 
+          AND fcm_token <> '' 
+          AND role = $1
+          AND deleted_at IS NULL
+        `,
+        [target]
+      );
 
     const users = fcmResult.rows;
     if (users.length === 0) {

@@ -153,16 +153,27 @@ exports.register = async (req, res) => {
   if (!phoneValidation.isValid) return res.status(400).json({ error: phoneValidation.error });
 
   try {
+    // 🔍 Check for existing email (including soft-deleted)
     const existing = await pool.query(
-      'SELECT id, is_verified FROM users WHERE email = $1',
+      `SELECT id, is_verified, deleted_at FROM users WHERE email = $1`,
       [email]
     );
 
     if (existing.rows.length > 0) {
-      if (existing.rows[0].is_verified) {
+      const user = existing.rows[0];
+
+      if (user.deleted_at) {
+        // ✅ Reactivate deleted account
+        await pool.query(
+          `DELETE FROM users WHERE id = $1`,
+          [user.id]
+        );
+      } else if (user.is_verified) {
+        // ❌ Already active and verified
         return res.status(400).json({ error: 'Email already registered and verified.' });
       } else {
-        await pool.query('DELETE FROM users WHERE id = $1', [existing.rows[0].id]);
+        // ❌ Exists but not verified (old pending registration)
+        await pool.query('DELETE FROM users WHERE id = $1', [user.id]);
       }
     }
 
@@ -177,10 +188,8 @@ exports.register = async (req, res) => {
     const values = [full_name, email, hashedPassword, phone_number, role, verification_code];
     await pool.query(insertQuery, values);
 
-
+    // Load and replace placeholders in email template
     let emailTemplate = fs.readFileSync(templatePath, 'utf-8');
-
-    // Replace placeholders
     emailTemplate = emailTemplate
       .replace('{{full_name}}', full_name)
       .replace('{{otp}}', verification_code);
@@ -205,6 +214,7 @@ exports.register = async (req, res) => {
     res.status(500).json({ error: 'Internal server error.' });
   }
 };
+
 
 exports.updateBusinessDetails = async (req, res) => {
   const user_id = req.user.userId;
@@ -330,29 +340,29 @@ exports.verifyEmail = async (req, res) => {
           await pool.query('UPDATE users SET fcm_token = $1 WHERE id = $2', [fcm_token, user.id]);
         }
 
-      if (user.role === 'Company') {
-        if (!user.stripe_account_id) {
-          // Create a connected account for payouts
-          const account = await stripe.accounts.create({
-            type: 'express', // or 'standard'
-            email: user.email,
-            business_type: 'individual', // or 'company'
-            capabilities: {
-              transfers: { requested: true },
-            },
-            metadata: {
-              user_id: user.id,
-              role: user.role,
-            },
-          });
+      // if (user.role === 'Company') {
+      //   if (!user.stripe_account_id) {
+      //     // Create a connected account for payouts
+      //     const account = await stripe.accounts.create({
+      //       type: 'express', // or 'standard'
+      //       email: user.email,
+      //       business_type: 'individual', // or 'company'
+      //       capabilities: {
+      //         transfers: { requested: true },
+      //       },
+      //       metadata: {
+      //         user_id: user.id,
+      //         role: user.role,
+      //       },
+      //     });
 
-          // Save account ID in DB
-          await pool.query('UPDATE users SET stripe_account_id = $1 WHERE id = $2', [
-            account.id,
-            user.id,
-          ]);
-        }
-      }
+      //     // Save account ID in DB
+      //     await pool.query('UPDATE users SET stripe_account_id = $1 WHERE id = $2', [
+      //       account.id,
+      //       user.id,
+      //     ]);
+      //   }
+      // }
 
       const token = jwt.sign({ userId: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
       res.json({
@@ -371,6 +381,7 @@ exports.verifyEmail = async (req, res) => {
           profile_image: user.profile_image,
           date_of_birth: user.date_of_birth,
           gender: user.gender,
+          stripe_account_status: user.stripe_account_status === '3' ? "Active" :  user.stripe_account_status === '2' ? "Under Review": "Pending",
           created_at: user.created_at,
           updated_at: user.updated_at
         }
@@ -607,6 +618,7 @@ exports.login = async (req, res) => {
       profile_image: user.profile_image,
       date_of_birth: user.date_of_birth,
       gender: user.gender,
+      stripe_account_status: user.stripe_account_status === '3' ? "Active" :  user.stripe_account_status === '2' ? "Under Review": "Pending",
       created_at: user.created_at,
       updated_at: user.updated_at,
       fcm_token: fcm_token
@@ -730,9 +742,33 @@ exports.checkOnboardingCompletion = async (req, res) => {
 };
 
 // Logout API (stateless)
-exports.logout = (req, res) => {
-  // For JWT, logout is handled on the client by deleting the token.
-  res.status(200).json({status: true, message: 'Logged out successfully' });
+exports.logout = async (req, res) => {
+  try {
+    const userId = req.user?.userId; // assumes auth middleware sets req.user
+
+    if (!userId) {
+      return res.status(401).json({ status: false, error: 'Unauthorized' });
+    }
+
+    // Remove both JWT and FCM tokens
+    await pool.query(
+      `UPDATE users 
+       SET fcm_token = NULL, updated_at = NOW()
+       WHERE id = $1`,
+      [userId]
+    );
+
+    return res.status(200).json({
+      status: true,
+      message: 'Logged out successfully',
+    });
+  } catch (err) {
+    console.error('Logout Error:', err.message);
+    return res.status(500).json({
+      status: false,
+      error: 'Failed to logout. Please try again.',
+    });
+  }
 };
 
 
@@ -1046,6 +1082,7 @@ exports.getProfile = async (req, res) => {
         address,
         business_overview,
         event_types,
+        stripe_account_status,
         accessibility
       FROM users 
       WHERE id = $1`,
@@ -1145,6 +1182,7 @@ exports.getProfile = async (req, res) => {
       profile_image_url: user.profile_image_url,
       date_of_birth: user.date_of_birth,
       gender: user.gender,
+      stripe_account_status:  user.stripe_account_status === '3' ? "Active" :  user.stripe_account_status === '2' ? "Under Review": "Pending",
       is_verified: user.is_verified,
       created_at: user.created_at,
       updated_at: user.updated_at,
@@ -1251,26 +1289,130 @@ exports.createBankLink = async (req, res) => {
 exports.deleteUser = async (req, res) => {
   const user_id = req.user?.userId;
 
-  if (!user_id) 
+  if (!user_id)
     return res.status(401).json({ status: false, message: 'Unauthorized' });
 
+  const client = await pool.connect();
+
   try {
-    // Soft delete: set deleted_at to current timestamp
-    const result = await pool.query(
-      'UPDATE users SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL RETURNING *',
+    // 1️⃣ Fetch user role
+    const userRes = await client.query(
+      `SELECT id, role FROM users WHERE id = $1 AND deleted_at IS NULL`,
+      [user_id]
+    );
+
+    if (userRes.rowCount === 0) {
+      return res.status(404).json({
+        status: false,
+        message: 'User not found or already deleted.',
+      });
+    }
+
+    const user = userRes.rows[0];
+
+    // 2️⃣ Role-based restriction logic
+    if (user.role === 'NDIS Member') {
+      // Member cannot delete if they have booked any event
+      const bookingCheck = await client.query(
+        `
+        SELECT id 
+        FROM event_bookings 
+        WHERE user_id = $1 
+          AND status NOT IN ('cancelled')
+        LIMIT 1
+        `,
+        [user_id]
+      );
+
+      if (bookingCheck.rows.length > 0) {
+        return res.status(400).json({
+          status: false,
+          error:
+            'You cannot delete your account because you have active or past event bookings.',
+        });
+      }
+    }
+
+    if (user.role === 'Company') {
+      // Company cannot delete if they have created any events
+      const eventCheck = await client.query(
+        `
+        SELECT id 
+        FROM company_events 
+        WHERE user_id = $1 
+          AND is_deleted IS false
+        LIMIT 1
+        `,
+        [user_id]
+      );
+
+      if (eventCheck.rows.length > 0) {
+        // 3️⃣ Check if anyone has booked those events
+        const bookedEventCheck = await client.query(
+          `
+          SELECT eb.id 
+          FROM event_bookings eb
+          INNER JOIN company_events ce ON ce.id = eb.event_id
+          WHERE ce.user_id = $1 
+            AND eb.status NOT IN ('cancelled')
+          LIMIT 1
+          `,
+          [user_id]
+        );
+
+        if (bookedEventCheck.rows.length > 0) {
+          return res.status(400).json({
+            status: false,
+            error:
+              'You cannot delete your account because users have booked your events.',
+          });
+        }
+
+        // If no one booked but events exist
+        return res.status(400).json({
+          status: false,
+          error:
+            'You cannot delete your account because you have created events.',
+        });
+      }
+    }
+
+    // 4️⃣ Soft delete: set deleted_at to current timestamp
+    const result = await client.query(
+      `
+      UPDATE users 
+      SET deleted_at = NOW() 
+      WHERE id = $1 AND deleted_at IS NULL 
+      RETURNING *
+      `,
       [user_id]
     );
 
     if (result.rowCount === 0) {
-      return res.status(404).json({ status: false, message: 'User not found or already deleted' });
+      return res.status(404).json({
+        status: false,
+        error: 'User not found or already deleted.',
+      });
     }
 
-    res.json({ status: true, message: 'User deleted successfully' });
+    res.json({
+      status: true,
+      message: 'Your account has been deleted successfully.',
+    });
+
   } catch (err) {
     console.error('Error deleting user:', err);
-    res.status(500).json({ status: false, message: 'Server error', error: err.message });
+    res.status(500).json({
+      status: false,
+      message: 'Server error',
+      error: err.message,
+    });
+  } finally {
+    client.release();
   }
 };
+
+
 
 
 exports.getNotifications = async (req, res) => {

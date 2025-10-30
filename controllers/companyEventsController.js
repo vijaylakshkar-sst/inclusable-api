@@ -293,7 +293,7 @@ exports.getCompanyEvents = async (req, res) => {
     lng,
     radius,
     page = 1,
-    limit = 20,
+    limit = 50,
   } = req.query;
 
   const parsedLimit = parseInt(limit, 10);
@@ -552,39 +552,116 @@ exports.deleteCompanyEvent = async (req, res) => {
   const { id } = req.params;
   const user_id = req.user?.userId;
 
-  if (!user_id) return res.status(401).json({ status: false, error: 'Unauthorized' });
+  if (!user_id)
+    return res.status(401).json({ status: false, error: 'Unauthorized' });
 
   try {
-    // Check if the event exists and belongs to the user
-    const checkEvent = await pool.query(
+    // 1️⃣ Check if the event exists and belongs to the user
+    const eventRes = await pool.query(
       'SELECT id FROM company_events WHERE id = $1 AND user_id = $2 AND is_deleted = FALSE',
       [id, user_id]
     );
 
-    if (checkEvent.rows.length === 0) {
-      return res.status(400).json({ status: false, error: 'Event not found or already deleted' });
+    if (eventRes.rows.length === 0) {
+      return res.status(404).json({
+        status: false,
+        error: 'Event not found or already deleted.',
+      });
     }
 
-    // Soft delete
+    // 2️⃣ Check if anyone has booked this event (active or completed, not cancelled)
+    const bookingRes = await pool.query(
+      `
+      SELECT id
+      FROM event_bookings
+      WHERE event_id = $1
+        AND status NOT IN ('cancelled')
+      LIMIT 1
+      `,
+      [id]
+    );
+
+    if (bookingRes.rows.length > 0) {
+      return res.status(400).json({
+        status: false,
+        error:
+          'This event cannot be deleted because one or more users have booked it.',
+      });
+    }
+
+    // 3️⃣ Soft delete the event
     await pool.query(
-      'UPDATE company_events SET is_deleted = TRUE, updated_at = NOW() WHERE id = $1 AND user_id = $2',
+      `
+      UPDATE company_events
+      SET is_deleted = TRUE, updated_at = NOW()
+      WHERE id = $1 AND user_id = $2
+      `,
       [id, user_id]
     );
 
-    res.json({ status: true, message: 'Event soft-deleted successfully' });
+    res.json({
+      status: true,
+      message: 'Event deleted successfully.',
+    });
   } catch (err) {
     console.error('Soft Delete Event Error:', err.message);
-    res.status(500).json({ status: false, error: 'Failed to delete event' });
+    res.status(500).json({
+      status: false,
+      error: 'Failed to delete event.',
+    });
   }
 };
 
 
+
 exports.getBookingsByCompany = async (req, res) => {
   const company_id = req.user?.userId; // assumes auth middleware sets it
-
   if (!company_id) return res.status(401).json({ error: 'Unauthorized' });
 
   try {
+    // Filters
+    const { status, search, start_date, end_date, page = 1, limit = 50 } = req.query;
+    const offset = (page - 1) * limit;
+
+    // Base query
+    let whereClause = `WHERE eb.company_id = $1`;
+    const queryParams = [company_id];
+    let paramIndex = 2;
+
+    // Add filters dynamically
+    if (status) {
+      whereClause += ` AND eb.status = $${paramIndex++}`;
+      queryParams.push(status);
+    }
+
+    if (search) {
+      whereClause += ` AND (
+        LOWER(u.full_name) LIKE LOWER($${paramIndex})
+        OR LOWER(u.email) LIKE LOWER($${paramIndex})
+        OR LOWER(ce.event_name) LIKE LOWER($${paramIndex})
+      )`;
+      queryParams.push(`%${search}%`);
+      paramIndex++;
+    }
+
+    if (start_date && end_date) {
+      whereClause += ` AND eb.created_at BETWEEN $${paramIndex++} AND $${paramIndex++}`;
+      queryParams.push(start_date, end_date);
+    }
+
+    // Total count query (for pagination)
+    const countQuery = `
+      SELECT COUNT(*) AS total
+      FROM event_bookings eb
+      JOIN users u ON eb.user_id = u.id
+      JOIN company_events ce ON eb.event_id = ce.id
+      ${whereClause}
+    `;
+    const countResult = await pool.query(countQuery, queryParams);
+    const total = parseInt(countResult.rows[0].total);
+    const totalPages = Math.ceil(total / limit);
+
+    // Main data query
     const query = `
       SELECT 
         eb.id AS booking_id,
@@ -607,11 +684,13 @@ exports.getBookingsByCompany = async (req, res) => {
       FROM event_bookings eb
       JOIN users u ON eb.user_id = u.id
       JOIN company_events ce ON eb.event_id = ce.id
-      WHERE eb.company_id = $1
+      ${whereClause}
       ORDER BY eb.created_at DESC
+      LIMIT $${paramIndex++} OFFSET $${paramIndex++}
     `;
+    queryParams.push(limit, offset);
 
-    const result = await pool.query(query, [company_id]);
+    const result = await pool.query(query, queryParams);
 
     const bookings = result.rows.map(booking => ({
       ...booking,
@@ -625,6 +704,10 @@ exports.getBookingsByCompany = async (req, res) => {
 
     res.json({
       status: true,
+      currentPage: parseInt(page),
+      totalPages,
+      totalRecords: total,
+      limit: parseInt(limit),
       data: bookings
     });
   } catch (err) {
@@ -710,7 +793,18 @@ exports.getBookingById = async (req, res) => {
 
 
 exports.getEvents = async (req, res) => {
-  let { search, type, location, price_type, accessibility_type, page = 1, limit = 20 } = req.body || {};
+  let {
+    search,
+    category,
+    location,
+    price_type,
+    accessibility_type,
+    lat,
+    lng,
+    radius,
+    page = 1,
+    limit = 50,
+  } = req.body || {};
 
   const parsedLimit = parseInt(limit, 10);
   const parsedPage = parseInt(page, 10);
@@ -734,41 +828,82 @@ exports.getEvents = async (req, res) => {
       u.year_experience,
       u.address AS business_address,
       u.business_overview
+  `;
+
+  // If lat/lng provided, add calculated distance
+  if (lat && lng) {
+    values.push(lat);
+    values.push(lng);
+    query += `,
+      (6371 * acos(
+        cos(radians($${values.length - 1})) * cos(radians(e.latitude)) * 
+        cos(radians(e.longitude) - radians($${values.length})) +
+        sin(radians($${values.length - 1})) * sin(radians(e.latitude))
+      )) AS distance_km
+    `;
+  }
+
+  query += `
     FROM company_events e
     JOIN users u ON e.user_id = u.id
     WHERE e.is_deleted = FALSE
   `;
 
+  // 🔍 Search by event name
   if (search) {
     values.push(`%${search}%`);
     query += ` AND e.event_name ILIKE $${values.length}`;
   }
 
-  // Convert to array if comma-separated string
-  if (type) {
-    const types = Array.isArray(type) ? type : type.split(',');
+  // 🏷️ Filter by multiple event types
+  if (category) {
+    const types = Array.isArray(category) ? category : category.split(',').map(t => t.trim());
     values.push(types);
     query += ` AND e.event_types && $${values.length}::text[]`;
   }
 
+  // 📍 Filter by text location
   if (location) {
     values.push(`%${location}%`);
     query += ` AND e.event_address ILIKE $${values.length}`;
   }
 
+  // 💰 Price filter
   if (price_type) {
     values.push(price_type);
     query += ` AND e.price_type = $${values.length}`;
   }
 
+  // 🦽 Filter by multiple accessibility types
   if (accessibility_type) {
-    const accessTypes = Array.isArray(accessibility_type) ? accessibility_type : accessibility_type.split(',');
+    const accessTypes = Array.isArray(accessibility_type)
+      ? accessibility_type
+      : accessibility_type.split(',').map(t => t.trim());
     values.push(accessTypes);
     query += ` AND e.accessibility_types && $${values.length}::text[]`;
   }
 
-  query += ` ORDER BY e.start_date DESC`;
+  // 📏 Radius filter (distance in km)
+  if (lat && lng && radius) {
+    // Use same lat/lng from earlier (2 placeholders already added)
+    values.push(radius);
+    query += ` AND (
+      6371 * acos(
+        cos(radians($1)) * cos(radians(e.latitude)) *
+        cos(radians(e.longitude) - radians($2)) +
+        sin(radians($1)) * sin(radians(e.latitude))
+      )
+    ) <= $${values.length}`;
+  }
 
+  // 🕒 Sort by date or distance
+  if (lat && lng) {
+    query += ` ORDER BY distance_km ASC`;
+  } else {
+    query += ` ORDER BY e.start_date DESC`;
+  }
+
+  // 📄 Pagination
   values.push(safeLimit);
   values.push(offset);
   query += ` LIMIT $${values.length - 1} OFFSET $${values.length}`;
@@ -792,6 +927,9 @@ exports.getEvents = async (req, res) => {
       total_available_seats: event.total_available_seats,
       event_address: event.event_address,
       how_to_reach_destination: event.how_to_reach_destination,
+      latitude: event.latitude,
+      longitude: event.longitude,
+      distance_km: event.distance_km ? parseFloat(event.distance_km.toFixed(2)) : null,
       event_thumbnail: event.event_thumbnail
         ? `${BASE_EVENT_IMAGE_URL}/${event.event_thumbnail}`
         : null,
@@ -815,70 +953,22 @@ exports.getEvents = async (req, res) => {
         website_url: event.website_url,
         year_experience: event.year_experience,
         address: event.business_address,
-        business_overview: event.business_overview
-      }
+        business_overview: event.business_overview,
+      },
     }));
 
-    res.json({ status: true, data: events });
+    res.json({
+      status: true,
+      // total: result.rowCount,
+      // page: safePage,
+      // limit: safeLimit,
+      data: events,
+    });
   } catch (err) {
     console.error('Get Events Error:', err.message);
     res.status(500).json({ status: false, error: 'Failed to fetch events' });
   }
 };
-
-// exports.createEventBooking = async (req, res) => {
-//   const user_id = req.user?.userId;
-//   const {
-//     company_id,
-//     event_id,
-//     event_price,
-//     number_of_tickets,
-//     total_amount,
-//     attendee_info // 👈 should be an array of { name, email }
-//   } = req.body;
-
-//   if (!user_id || !event_id || !company_id || !number_of_tickets || !total_amount) {
-//     return res.status(400).json({ status: false, error: 'Missing required fields' });
-//   }
-// console.log("Inserting booking for event_id:", event_id);
-//   // Optional: Validate attendee_info length === number_of_tickets
-
-// const eventCheck = await pool.query(
-//   'SELECT id FROM company_events WHERE id = $1 AND user_id = $2',
-//   [event_id, company_id]
-// );
-
-// if (eventCheck.rows.length === 0) {
-//   return res.status(400).json({ status: false, error: 'Invalid event_id or event does not belong to the specified company.' });
-// }
-
-//   try {
-//     const query = `
-//       INSERT INTO event_bookings (
-//         user_id, company_id, event_id, event_price, number_of_tickets,
-//         total_amount, attendee_info
-//       ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-//     `;
-
-//     const values = [
-//       user_id,
-//       company_id,
-//       event_id,
-//       event_price || null,
-//       number_of_tickets,
-//       total_amount,
-//       JSON.stringify(attendee_info || [])
-//     ];
-
-//     await pool.query(query, values);
-
-//     res.status(201).json({ status: true, message: 'Booking successful' });
-//   } catch (err) {
-//     console.error('Booking Error:', err.message);
-//     res.status(500).json({ status: false, error: 'Internal server error' });
-//   }
-// };
-
 
 exports.createEventBooking = async (req, res) => {
   const user_id = req.user?.userId;
@@ -891,11 +981,8 @@ exports.createEventBooking = async (req, res) => {
     attendee_info // [{ name, email }]
   } = req.body;
 
-  // Basic validation
-
-  // Check if event exists and belongs to company
   const eventCheck = await pool.query(
-    'SELECT id,price_type FROM company_events WHERE id = $1 AND user_id = $2',
+    'SELECT id, price_type, total_available_seats FROM company_events WHERE id = $1 AND user_id = $2',
     [event_id, company_id]
   );
 
@@ -906,67 +993,57 @@ exports.createEventBooking = async (req, res) => {
     });
   }
 
-   const eventDataCheck = eventCheck.rows[0];
+  const eventDataCheck = eventCheck.rows[0];
 
-  if(eventDataCheck.price_type === 'Paid'){
-    if (!user_id || !event_id || !company_id || !number_of_tickets || !total_amount) {
-        return res.status(400).json({ status: false, error: 'Missing required fields' });
-      }
-  }else{
-
-     if (!user_id || !event_id || !company_id || !number_of_tickets) {
-        return res.status(400).json({ status: false, error: 'Missing required fields' });
-      }
+  // Check seat availability before proceeding
+  if (eventDataCheck.total_available_seats !== null &&
+      eventDataCheck.total_available_seats < number_of_tickets) {
+    return res.status(400).json({
+      status: false,
+      error: `Only ${eventDataCheck.total_available_seats} seats are available.`,
+    });
   }
 
+  if (eventDataCheck.price_type === 'Paid') {
+    if (!user_id || !event_id || !company_id || !number_of_tickets || !total_amount) {
+      return res.status(400).json({ status: false, error: 'Missing required fields' });
+    }
+  } else {
+    if (!user_id || !event_id || !company_id || !number_of_tickets) {
+      return res.status(400).json({ status: false, error: 'Missing required fields' });
+    }
+  }
 
- 
-  
-
-  // Optional: Validate number of attendees
   if (attendee_info && attendee_info.length !== number_of_tickets) {
     return res.status(400).json({ status: false, error: 'Attendee count mismatch with number_of_tickets' });
   }
-
-  
- 
-  console.log('✅ Event found:', eventDataCheck.price_type );
-  
 
   const client = await pool.connect();
 
   try {
     await client.query('BEGIN');
 
-    // 1. Insert into event_bookings with payment_status = pending
-    const bookingInsertQuery = `
-      INSERT INTO event_bookings (
-        user_id, company_id, event_id, event_price, number_of_tickets,
-        total_amount, attendee_info, status, platform_fee
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', $8)
-      RETURNING id
-    `;
-
     const Feesquery = `
       SELECT 
-        id, 
-        service_type,
-        company_fee,
-        driver_fee,
-        member_fee,
-        platform_fee,
-        fee_type,
-        updated_at
+        id, service_type, company_fee, driver_fee, member_fee, platform_fee, fee_type, updated_at
       FROM platform_fees
       WHERE service_type = 'Event Booking'
       ORDER BY updated_at DESC
       LIMIT 1
     `;
+    const { rows } = await pool.query(Feesquery);
 
-    const { rows } = await pool.query(Feesquery);  
-
-    const platform_fee = eventDataCheck.price_type === 'Free' ? 0.00 : rows[0].platform_fee;
+    const platform_fee = eventDataCheck.price_type === 'Free' ? 0.00 : rows[0]?.platform_fee || 0.00;
+    const status = eventDataCheck.price_type === 'Free' ? 'confirmed' : 'pending';
+    // 1️⃣ Insert booking
+    const bookingInsertQuery = `
+      INSERT INTO event_bookings (
+        user_id, company_id, event_id, event_price, number_of_tickets,
+        total_amount, attendee_info, status, platform_fee
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      RETURNING id
+    `;
 
     const bookingValues = [
       user_id,
@@ -976,83 +1053,84 @@ exports.createEventBooking = async (req, res) => {
       number_of_tickets,
       total_amount,
       JSON.stringify(attendee_info || []),
+      status,
       platform_fee
     ];
 
     const bookingResult = await client.query(bookingInsertQuery, bookingValues);
     const booking_id = bookingResult.rows[0].id;
 
-    let paymentIntent=null;
-    // 2. Create Stripe PaymentIntent (AUD)
+    // 2️⃣ Decrease available seats
+    await client.query(
+      `UPDATE company_events 
+       SET total_available_seats = total_available_seats - $1,
+           updated_at = NOW()
+       WHERE id = $2`,
+      [number_of_tickets, event_id]
+    );
+
+    // 3️⃣ Create Stripe payment if Paid
+    let paymentIntent = null;
     if (eventDataCheck.price_type === 'Paid') {
-         paymentIntent = await stripe.paymentIntents.create({
-          amount: Math.round(total_amount * 100), // Convert to cents
-          currency: 'aud',
-          metadata: {
-            booking_id: booking_id,
-            user_id: user_id,
-            event_id: event_id,
-          },
-        });   
-          // 3. Insert into transactions table
-        await client.query(
-          `INSERT INTO transactions (booking_id, user_id, event_id, payment_intent_id, amount, currency, status)
-          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-          [
-            booking_id,
-            user_id,
-            event_id,
-            paymentIntent ? paymentIntent.id : null,
-            total_amount,
-            'aud',
-            'pending'
-          ]
-        );    
-    }
-
-   
- 
-
-    const userData = await pool.query(
-      'SELECT * FROM users WHERE id = $1',
-      [user_id]
-    );
-    const user = userData.rows[0];
-
-    // Fetch event + business info
-    const eventData = await pool.query(
-      `SELECT id, event_name, user_id AS business_user_id
-      FROM company_events WHERE id = $1`,
-      [event_id]
-    );
-    const event = eventData.rows[0];
-
-    if (event) {
-      const dynamicData = {
-        title: "New Booking Received!",
-        body: `${user.full_name} just booked ${event.event_name}.`,
-        type: "Booking",
-        target: "Company",
-        id: String(event.id),
-        booking_id: String(booking_id),
-      };
-
-      await sendNotificationToBusiness({
-        businessUserId: event.business_user_id,
-        title: dynamicData.title,
-        message: dynamicData.body,
-        type: dynamicData.type,
-        target: dynamicData.target,
-        id: dynamicData.id,
-        booking_id: dynamicData.booking_id
+      paymentIntent = await stripe.paymentIntents.create({
+        amount: Math.round(total_amount * 100),
+        currency: 'aud',
+        metadata: {
+          booking_id: booking_id,
+          user_id: user_id,
+          event_id: event_id,
+        },
       });
+
+      await client.query(
+        `INSERT INTO transactions (booking_id, user_id, event_id, payment_intent_id, amount, currency, status)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [booking_id, user_id, event_id, paymentIntent.id, total_amount, 'aud', 'pending']
+      );
     }
+
+    if(eventDataCheck.price_type === 'Free'){
+      // 4️⃣ Send Notification
+      const userData = await pool.query('SELECT * FROM users WHERE id = $1', [user_id]);
+      const user = userData.rows[0];
+
+      const eventData = await pool.query(
+        `SELECT id, event_name, user_id AS business_user_id
+        FROM company_events WHERE id = $1`,
+        [event_id]
+      );
+
+      const event = eventData.rows[0];
+      if (event) {
+        const dynamicData = {
+          title: "New Booking Received!",
+          body: `${user.full_name} just booked ${event.event_name}.`,
+          type: "Booking",
+          target: "Company",
+          id: String(event.id),
+          booking_id: String(booking_id),
+        };
+
+        await sendNotificationToBusiness({
+          businessUserId: event.business_user_id,
+          title: dynamicData.title,
+          message: dynamicData.body,
+          type: dynamicData.type,
+          target: dynamicData.target,
+          id: dynamicData.id,
+          booking_id: dynamicData.booking_id
+        });
+      }
+    }
+    
 
     await client.query('COMMIT');
 
     return res.status(201).json({
       status: true,
-      message: eventDataCheck.price_type === 'Paid' ? 'Booking initiated. Complete payment to confirm.' : 'Booking succefully created.',
+      message: eventDataCheck.price_type === 'Paid'
+        ? 'Booking initiated. Complete payment to confirm.'
+        : 'Booking successfully created.',
       data: {
         clientSecret: paymentIntent ? paymentIntent.client_secret : null,
         bookingId: booking_id
