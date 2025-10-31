@@ -35,5 +35,6 @@ router.delete('/company-events/:id/image', auth,companyEventsController.deleteCo
 router.post('/partner-events',  companyEventsController.getEvents);
 router.get('/partner-events/:id', companyEventsController.getEventById); // details
 router.post('/events/book', auth, companyEventsController.createEventBooking);
+router.post('/events/book/cancel/:bookingId', auth, companyEventsController.cancelBooking);
 
 module.exports = router;

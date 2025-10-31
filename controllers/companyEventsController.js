@@ -990,7 +990,8 @@ exports.createEventBooking = async (req, res) => {
     event_price = 0.00,
     number_of_tickets,
     total_amount = 0.00,
-    attendee_info // [{ name, email }]
+    attendee_info,
+    platform_fee = 0.00,
   } = req.body;
 
   const eventCheck = await pool.query(
@@ -1045,7 +1046,7 @@ exports.createEventBooking = async (req, res) => {
     `;
     const { rows } = await pool.query(Feesquery);
 
-    const platform_fee = eventDataCheck.price_type === 'Free' ? 0.00 : rows[0]?.platform_fee || 0.00;
+    
     const status = eventDataCheck.price_type === 'Free' ? 'confirmed' : 'pending';
     // 1️⃣ Insert booking
     const bookingInsertQuery = `
@@ -1152,6 +1153,52 @@ exports.createEventBooking = async (req, res) => {
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('❌ Booking Error:', err.message);
+    return res.status(500).json({ status: false, error: 'Internal server error' });
+  } finally {
+    client.release();
+  }
+};
+
+
+
+exports.cancelBooking = async (req, res) => {
+  const { bookingId } = req.params;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const booking = await client.query(
+      `SELECT event_id, number_of_tickets, status FROM event_bookings WHERE id = $1`,
+      [bookingId]
+    );
+
+    if (!booking.rows.length) return res.status(404).json({ status: false, message: 'Booking not found' });
+
+    if (booking.rows[0].status !== 'pending') {
+      return res.status(400).json({ status: false, message: 'Booking already finalized' });
+    }
+
+    const { event_id, number_of_tickets } = booking.rows[0];
+
+    // Restore seats
+    await client.query(
+      `UPDATE company_events
+       SET total_available_seats = total_available_seats + $1,
+           updated_at = NOW()
+       WHERE id = $2`,
+      [number_of_tickets, event_id]
+    );
+
+    // Update booking + transaction
+    await client.query(`UPDATE event_bookings SET status = 'cancelled' WHERE id = $1`, [bookingId]);
+    await client.query(`UPDATE transactions SET status = 'cancelled' WHERE booking_id = $1`, [bookingId]);
+
+    await client.query('COMMIT');
+    return res.status(400).json({ status: false, error: 'Booking cancelled and seats restored.' });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('Cancel booking error:', err.message);
     return res.status(500).json({ status: false, error: 'Internal server error' });
   } finally {
     client.release();

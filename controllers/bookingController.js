@@ -8,6 +8,21 @@ exports.getUserBookings = async (req, res) => {
   if (!user_id) return res.status(401).json({ error: 'Unauthorized' });
 
   try {
+    let { page = 1, limit = 50 } = req.query; // ✅ Get from query params
+    page = parseInt(page, 10);
+    limit = parseInt(limit, 10);
+
+    const offset = (page - 1) * limit;
+
+    // ✅ Get total count for pagination
+    const countResult = await pool.query(
+      `SELECT COUNT(*) AS total FROM event_bookings WHERE user_id = $1`,
+      [user_id]
+    );
+    const total = parseInt(countResult.rows[0].total, 10);
+    const totalPages = Math.ceil(total / limit);
+
+    // ✅ Main paginated query
     const query = `
       SELECT 
         eb.id AS booking_id,
@@ -31,11 +46,12 @@ exports.getUserBookings = async (req, res) => {
       JOIN users u ON eb.company_id = u.id
       WHERE eb.user_id = $1
       ORDER BY eb.created_at DESC
+      LIMIT $2 OFFSET $3
     `;
 
-    const result = await pool.query(query, [user_id]);
+    const result = await pool.query(query, [user_id, limit, offset]);
 
-    // Attach full thumbnail URL
+    // ✅ Attach full thumbnail URL
     const bookings = result.rows.map(b => ({
       ...b,
       event_thumbnail: b.event_thumbnail
@@ -43,7 +59,16 @@ exports.getUserBookings = async (req, res) => {
         : null
     }));
 
-    res.json({ status: true, data:bookings });
+    res.json({
+      status: true,
+      pagination: {
+        total,
+        totalPages,
+        currentPage: page,
+        limit
+      },
+      data: bookings
+    });
   } catch (err) {
     console.error('Get User Bookings Error:', err.message);
     res.status(500).json({ status: false, error: 'Failed to fetch bookings' });
