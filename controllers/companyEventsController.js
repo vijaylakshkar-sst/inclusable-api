@@ -860,7 +860,7 @@ exports.getEvents = async (req, res) => {
     FROM company_events e
     JOIN users u ON e.user_id = u.id
     WHERE e.is_deleted = FALSE
-      AND (e.start_date + e.start_time::interval) >= NOW()
+      AND e.start_date >= CURRENT_DATE
   `;
 
   // 🔍 Search by event name

@@ -1416,9 +1416,16 @@ exports.deleteUser = async (req, res) => {
 
 
 exports.getNotifications = async (req, res) => {
-  const { user_id, driver_id, target, is_read } = req.query;
+  const { user_id, driver_id, target, is_read, page = 1, limit = 20 } = req.query;
 
   try {
+    // Convert pagination to integers safely
+    const parsedLimit = parseInt(limit, 10);
+    const parsedPage = parseInt(page, 10);
+    const safeLimit = !isNaN(parsedLimit) && parsedLimit > 0 ? parsedLimit : 20;
+    const safePage = !isNaN(parsedPage) && parsedPage > 0 ? parsedPage : 1;
+    const offset = (safePage - 1) * safeLimit;
+
     // Base query
     let query = `
       SELECT n.*, 
@@ -1450,13 +1457,27 @@ exports.getNotifications = async (req, res) => {
       query += ` AND n.is_read = $${values.length}`;
     }
 
-    query += ` ORDER BY n.created_at DESC`;
+    // Count total notifications (for pagination info)
+    const countQuery = `SELECT COUNT(*) AS total FROM (${query}) AS count_query`;
+    const countResult = await pool.query(countQuery, values);
+    const totalCount = parseInt(countResult.rows[0].total, 10);
 
+    // Add ordering and pagination
+    values.push(safeLimit);
+    values.push(offset);
+    query += ` ORDER BY n.created_at DESC LIMIT $${values.length - 1} OFFSET $${values.length}`;
+
+    // Execute paginated query
     const { rows } = await pool.query(query, values);
 
+    // Send response
     res.status(200).json({
       status: true,
       message: "Notifications fetched successfully",
+      page: safePage,
+      limit: safeLimit,
+      total: totalCount,
+      total_pages: Math.ceil(totalCount / safeLimit),
       count: rows.length,
       data: rows,
     });
