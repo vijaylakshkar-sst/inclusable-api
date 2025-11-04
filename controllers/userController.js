@@ -155,20 +155,18 @@ exports.register = async (req, res) => {
   try {
     // 🔍 Check for existing email (including soft-deleted)
     const existing = await pool.query(
-      `SELECT id, is_verified, deleted_at FROM users WHERE email = $1`,
+      `SELECT id, is_verified, deleted_at 
+      FROM users 
+      WHERE email = $1 
+      AND deleted_at IS NULL`,
       [email]
     );
+
 
     if (existing.rows.length > 0) {
       const user = existing.rows[0];
 
-      if (user.deleted_at) {
-        // ✅ Reactivate deleted account
-        await pool.query(
-          `DELETE FROM users WHERE id = $1`,
-          [user.id]
-        );
-      } else if (user.is_verified) {
+      if (user.is_verified) {
         // ❌ Already active and verified
         return res.status(400).json({ error: 'Email already registered and verified.' });
       } else {
@@ -313,7 +311,14 @@ exports.verifyEmail = async (req, res) => {
   }
   try {
     
-    const userRes = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+    // const userRes = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+    const userRes = await pool.query(
+  `SELECT * 
+   FROM users 
+   WHERE email = $1 
+   AND deleted_at IS NULL`,
+  [email]
+);
     if (userRes.rows.length === 0) {
       return res.status(404).json({ error: 'User not found.' });
     }
@@ -443,6 +448,9 @@ exports.resendVerificationCode = async (req, res) => {
 exports.addAdditionalDetails = async (req, res) => {
   const { date_of_birth, gender, skipped } = req.body;
   let profile_image = null;
+
+  console.log(req.files,'profile_image');
+  
   const email = req.user.email;
   if (!email) {
     return res.status(400).json({ error: 'User email not found in token.' });
@@ -462,8 +470,8 @@ exports.addAdditionalDetails = async (req, res) => {
       return res.status(500).json({ status: false, error: 'Internal server error.' });
     }
   }
-  if (req.file) {
-    profile_image = req.file.filename;
+  if (req.files && req.files.profile_image && req.files.profile_image.length > 0) {
+    profile_image = req.files.profile_image[0].filename;
   }
   try {
     const userRes = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
@@ -1312,13 +1320,15 @@ exports.deleteUser = async (req, res) => {
 
     // 2️⃣ Role-based restriction logic
     if (user.role === 'NDIS Member') {
-      // Member cannot delete if they have booked any event
+      // Member cannot delete if they have booked future or ongoing events
       const bookingCheck = await client.query(
         `
-        SELECT id 
-        FROM event_bookings 
-        WHERE user_id = $1 
-          AND status NOT IN ('cancelled')
+        SELECT eb.id
+        FROM event_bookings eb
+        INNER JOIN company_events ce ON ce.id = eb.event_id
+        WHERE eb.user_id = $1
+          AND eb.status NOT IN ('cancelled')
+          AND ce.end_date >= NOW()
         LIMIT 1
         `,
         [user_id]
@@ -1328,32 +1338,34 @@ exports.deleteUser = async (req, res) => {
         return res.status(400).json({
           status: false,
           error:
-            'You cannot delete your account because you have active or past event bookings.',
+            'You cannot delete your account because you have active or upcoming event bookings.',
         });
       }
     }
 
     if (user.role === 'Company') {
-      // Company cannot delete if they have created any events
+      // Company cannot delete if they have upcoming or ongoing events
       const eventCheck = await client.query(
         `
-        SELECT id 
-        FROM company_events 
-        WHERE user_id = $1 
+        SELECT id
+        FROM company_events
+        WHERE user_id = $1
           AND is_deleted IS false
+          AND end_date >= NOW()
         LIMIT 1
         `,
         [user_id]
       );
 
       if (eventCheck.rows.length > 0) {
-        // 3️⃣ Check if anyone has booked those events
+        // 3️⃣ Check if anyone has booked those upcoming events
         const bookedEventCheck = await client.query(
           `
-          SELECT eb.id 
+          SELECT eb.id
           FROM event_bookings eb
           INNER JOIN company_events ce ON ce.id = eb.event_id
-          WHERE ce.user_id = $1 
+          WHERE ce.user_id = $1
+            AND ce.end_date >= NOW()
             AND eb.status NOT IN ('cancelled')
           LIMIT 1
           `,
@@ -1364,20 +1376,19 @@ exports.deleteUser = async (req, res) => {
           return res.status(400).json({
             status: false,
             error:
-              'You cannot delete your account because users have booked your events.',
+              'You cannot delete your account because users have booked your upcoming or ongoing events.',
           });
         }
 
-        // If no one booked but events exist
         return res.status(400).json({
           status: false,
           error:
-            'You cannot delete your account because you have created events.',
+            'You cannot delete your account because you have upcoming or ongoing events.',
         });
       }
     }
 
-    // 4️⃣ Soft delete: set deleted_at to current timestamp
+    // 4️⃣ Soft delete user
     const result = await client.query(
       `
       UPDATE users 

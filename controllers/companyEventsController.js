@@ -132,38 +132,67 @@ exports.updateCompanyEvent = async (req, res) => {
   const { id } = req.params;
   const user_id = req.user?.userId;
 
-  if (!user_id) return res.status(401).json({ status: false, error: 'Unauthorized' });
+  if (!user_id)
+    return res.status(401).json({ status: false, error: 'Unauthorized' });
 
   const validation = eventUpdateSchema.validate(req.body);
   if (validation.error) {
-    return res.status(400).json({ status: false, error: validation.error.details[0].message });
+    return res.status(400).json({
+      status: false,
+      error: validation.error.details[0].message,
+    });
   }
 
   try {
-    // Check event belongs to company
+    // ✅ 1. Check event belongs to company
     const checkEvent = await pool.query(
       'SELECT * FROM company_events WHERE id = $1 AND user_id = $2',
       [id, user_id]
     );
 
     if (checkEvent.rows.length === 0) {
-      return res.status(404).json({ status: false, error: 'Event not found or unauthorized' });
+      return res
+        .status(404)
+        .json({ status: false, error: 'Event not found or unauthorized' });
     }
 
     const oldEvent = checkEvent.rows[0];
 
-    // Image updates
-    const thumbnail = req.files?.['event_thumbnail']?.[0]?.filename || oldEvent.event_thumbnail;
-    const eventImages = req.files?.['event_images']
-      ? req.files['event_images'].map(f => String(f.filename))
-      : Array.isArray(oldEvent.event_images) ? oldEvent.event_images : [];
+    // ✅ 2. Handle thumbnail (replace if new uploaded)
+    const thumbnail =
+      req.files?.['event_thumbnail']?.[0]?.filename ||
+      oldEvent.event_thumbnail;
 
-    // Fields to update
+    // ✅ 3. Handle event images (append new ones to existing array)
+    const oldImages = Array.isArray(oldEvent.event_images)
+      ? oldEvent.event_images
+      : [];
+
+    const newImages = req.files?.['event_images']
+      ? req.files['event_images'].map((f) => String(f.filename))
+      : [];
+
+    const mergedImages =
+      newImages.length > 0 ? [...oldImages, ...newImages] : oldImages;
+
+    // ✅ 4. Prepare fields for update
     const fields = [
-      'event_name', 'event_types', 'disability_types', 'accessibility_types',
-      'event_description', 'start_date', 'end_date', 'start_time', 'end_time',
-      'price_type', 'price', 'total_available_seats',
-      'event_address', 'how_to_reach_destination', 'latitude', 'longitude'
+      'event_name',
+      'event_types',
+      'disability_types',
+      'accessibility_types',
+      'event_description',
+      'start_date',
+      'end_date',
+      'start_time',
+      'end_time',
+      'price_type',
+      'price',
+      'total_available_seats',
+      'event_address',
+      'how_to_reach_destination',
+      'latitude',
+      'longitude',
     ];
 
     const updates = [];
@@ -176,14 +205,19 @@ exports.updateCompanyEvent = async (req, res) => {
         const parsed = JSON.parse(input);
         return Array.isArray(parsed) ? parsed : [parsed];
       } catch {
-        return input.split(',').map(s => s.trim());
+        return input.split(',').map((s) => s.trim());
       }
     };
 
+    // ✅ 5. Add each field dynamically
     for (const field of fields) {
       const value = req.body[field];
 
-      if (['event_types', 'disability_types', 'accessibility_types'].includes(field)) {
+      if (
+        ['event_types', 'disability_types', 'accessibility_types'].includes(
+          field
+        )
+      ) {
         const parsedArray = parseArray(value);
         updates.push(`${field} = $${index}::text[]`);
         values.push(parsedArray);
@@ -195,20 +229,18 @@ exports.updateCompanyEvent = async (req, res) => {
       index++;
     }
 
-
-
-    // Add image fields
+    // ✅ 6. Add image updates (keep old + add new)
     updates.push(`event_thumbnail = $${index}`);
     values.push(thumbnail);
     index++;
 
     updates.push(`event_images = $${index}::text[]`);
-    values.push(eventImages);
+    values.push(mergedImages);
     index++;
 
     updates.push(`updated_at = NOW()`);
 
-    // WHERE clause
+    // ✅ 7. WHERE clause
     const updateQuery = `
       UPDATE company_events
       SET ${updates.join(', ')}
@@ -220,7 +252,10 @@ exports.updateCompanyEvent = async (req, res) => {
 
     await pool.query(updateQuery, values);
 
-    res.json({ status: true, message: 'Event updated successfully' });
+    res.json({
+      status: true,
+      message: 'Event updated successfully.',
+    });
   } catch (err) {
     console.error('Update Event Error:', err.message);
     res.status(500).json({ status: false, error: 'Failed to update event' });
@@ -860,7 +895,7 @@ exports.getEvents = async (req, res) => {
     FROM company_events e
     JOIN users u ON e.user_id = u.id
     WHERE e.is_deleted = FALSE
-      AND e.start_date >= CURRENT_DATE
+      AND e.end_date >= CURRENT_DATE
   `;
 
   // 🔍 Search by event name
