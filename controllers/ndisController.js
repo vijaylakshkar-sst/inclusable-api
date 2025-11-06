@@ -1,5 +1,6 @@
 // controllers/ndisController.js
 const pool = require('../dbconfig');
+const { getCurrentAccess } = require('../hooks/checkPermissionHook');
 
 // Validation function for NDIS number
 const validateNdisNumber = (ndisNumber) => {
@@ -39,6 +40,29 @@ exports.getDropdownValues = async (req, res) => {
 exports.submitNdisInfo = async (req, res) => {
   const userId = req.user.userId;
   const { ndis_number, preferred_event_types, primary_disability_type, support_requirements, skipped } = req.body;
+
+
+  // 🔍 Fetch user’s current plan and feature access
+  const subscription = await getCurrentAccess(req, res, true);
+  const { features } = subscription.plan;
+
+
+  // ✅ Apply category limits based on plan
+  if (subscription.plan.type === 'free') {
+    console.log(preferred_event_types.length);
+    const maxAllowed = features.maxCategories || 2;
+
+    if (preferred_event_types.length > maxAllowed) {
+      return res.status(403).json({
+        success: false,
+        message: `Free plan allows selecting up to ${maxAllowed} categories. Please upgrade for unlimited access.`,
+        current_plan: subscription.plan.name,
+        upgrade_suggestion: 'monthly',
+      });
+    }
+  }
+
+
   if (skipped === 'true' || skipped === true) {
     try {
       await pool.query(

@@ -11,6 +11,8 @@ const legalContentRoutes = require('./routes/legalContentRoutes');
 const companyEventsRoutes = require('./routes/companyEventsRoutes');
 const webhookRoutes = require('./routes/webhookRoutes');
 const userCanBookRoutes = require('./routes/userCabRoutes');
+const subscriptionRoutes = require('./routes/subscriptionRoutes');
+const inAppWebhookRoutes = require('./routes/inAppWebhookRoutes');
 
 // =============Admin Routes==========================
 const termsConditionsRoutes = require('./routes/admin/termsConditionsRoutes');
@@ -21,6 +23,7 @@ const cabTypeRoutes = require('./routes/admin/cabTypeRoutes');
 const supportTicketRoutes = require('./routes/admin/supportTicketRoutes');
 
 
+
 //================Driver API==============================
 
 const driverRoutes = require('./routes/driverRoutes');
@@ -28,8 +31,12 @@ const driverRoutes = require('./routes/driverRoutes');
 const app = express();
 
 app.use(cors());
+
 app.use('/api/v1', webhookRoutes);
-app.use(express.json());
+// ✅ JSON parser must come BEFORE all routes
+app.use(express.json({ limit: '10mb' }));
+
+app.use('/api/v1', inAppWebhookRoutes);
 
 app.use('/api/v1', eventRoutes);
 app.use('/api/v1', userRoutes);
@@ -41,6 +48,9 @@ app.use('/api/v1', legalContentRoutes);
 app.use('/api/v1', userCanBookRoutes);
 
 app.use('/api/v1', companyEventsRoutes);
+
+app.use('/api/v1/subscriptions', subscriptionRoutes);
+
 // Serve images statically
 app.use('/uploads', express.static(__dirname + '/uploads'));
 

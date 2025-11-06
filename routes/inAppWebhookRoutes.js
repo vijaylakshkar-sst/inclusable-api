@@ -1,0 +1,10 @@
+const express = require('express');
+const bodyParser = require('body-parser');
+const router = express.Router();
+
+const { handleInAppWebhook } = require('../controllers/inAppWebhookController');
+
+// ✅ IAP webhook just needs normal JSON
+router.post('/in-app-webhook/iap', express.json({ limit: '2mb' }), handleInAppWebhook);
+
+module.exports = router;

@@ -1,8 +1,15 @@
 const express = require('express');
-const router = express.Router();
-const webhookController = require('../controllers/webhookController');
 const bodyParser = require('body-parser');
+const router = express.Router();
 
-router.post('/stripe/webhook', bodyParser.raw({ type: 'application/json' }), webhookController.handleStripeWebhook);
+const webhookController = require('../controllers/webhookController');
 
-module.exports = router; // ✅ this is mandatory
+// ✅ Stripe webhook requires RAW body
+router.post(
+  '/stripe/webhook',
+  bodyParser.raw({ type: 'application/json' }),
+  webhookController.handleStripeWebhook
+);
+
+
+module.exports = router;

@@ -4,6 +4,9 @@ const stripe = require('../stripe');
 const BASE_EVENT_IMAGE_URL = process.env.BASE_EVENT_IMAGE_URL;
 const BASE_IMAGE_URL = process.env.BASE_IMAGE_URL;
 const { sendNotification,sendNotificationToBusiness } = require("../hooks/notification");
+// Fetch user’s plan dynamically
+const { getCurrentAccess } = require('../hooks/checkPermissionHook');
+
 
 exports.createCompanyEvent = async (req, res) => {
 
@@ -34,6 +37,16 @@ exports.createCompanyEvent = async (req, res) => {
   const user_id = req.user?.userId; // Auth middleware must set req.user
   if (!user_id) {
     return res.status(401).json({ status: false, error: 'Unauthorized' });
+  }
+const subscription = await getCurrentAccess(req, res, true);
+  // If the event is "paid", ensure plan allows paid ticketing
+  if (price_type === 'paid' && !subscription.plan.features.canAccessPaidTicket) {
+    return res.status(403).json({
+      success: false,
+      message: `Your current plan (“${subscription.plan.name}”) does not allow paid ticketing. Please upgrade to enable this feature.`,
+      current_plan: subscription.plan.name,
+      upgrade_suggestion: 'growth'
+    });
   }
 
   const thumbnail = req.files['event_thumbnail']?.[0]?.filename || null;
