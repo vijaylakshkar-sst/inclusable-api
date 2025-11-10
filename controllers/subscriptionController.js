@@ -1,18 +1,18 @@
 const pool = require('../dbconfig');
 
-exports.getSubscriptionPlans = async (req, res) => { 
+exports.getSubscriptionPlans = async (req, res) => {
   try {
- //const userId = req.user.userId;
-   // Ensure user is authenticated
+    //const userId = req.user.userId;
+    // Ensure user is authenticated
     if (!req.user || !req.user.userId) {
-      return res.status(401).json({ success: false, message: 'Unauthorized access' });
+      return res.status(401).json({ status: false, message: 'Unauthorized access' });
     }
 
     // Get role from authenticated user
     const userRole = req.user.role;
 
     if (!userRole) {
-      return res.status(400).json({ success: false, message: 'User role not found in token' });
+      return res.status(400).json({ status: false, message: 'User role not found in token' });
     }
 
     // normalize role name
@@ -52,15 +52,18 @@ exports.getSubscriptionPlans = async (req, res) => {
     client.release();
 
     return res.status(200).json({
-      success: true,
-      role: normalizedRole,
-      count: rows.length,
-      plans: rows,
+      status: true,
+      data: {
+        role: normalizedRole,
+        count: rows.length,
+        plans: rows
+      },
+      message: 'Subscription plans fetched successfully',
     });
   } catch (err) {
     console.error('❌ Error fetching subscription plans:', err.message);
     return res.status(500).json({
-      success: false,
+      status: false,
       message: 'Server error fetching subscription plans',
       error: err.message,
     });
@@ -86,7 +89,7 @@ exports.startFreeTrial = async (req, res) => {
     if (existingTrial.rows.length > 0) {
       client.release();
       return res.status(400).json({
-        success: false,
+        status: false,
         message: 'You have already used your free trial.',
       });
     }
@@ -98,11 +101,11 @@ exports.startFreeTrial = async (req, res) => {
       [plan_id]
     );
     if (planRes.rows.length === 0)
-      return res.status(400).json({ success: false, message: 'Invalid plan.' });
+      return res.status(400).json({ status: false, message: 'Invalid plan.' });
 
     const trial_days = planRes.rows[0].trial_days;
     if (trial_days <= 0)
-      return res.status(400).json({ success: false, message: 'This plan has no trial.' });
+      return res.status(400).json({ status: false, message: 'This plan has no trial.' });
 
     const now = new Date();
     const expiry_date = new Date(now.getTime() + trial_days * 24 * 60 * 60 * 1000);
@@ -125,14 +128,14 @@ exports.startFreeTrial = async (req, res) => {
     let group_id = groupRes.rows.length
       ? groupRes.rows[0].id
       : (
-          await client.query(
-            `INSERT INTO user_subscription_groups
+        await client.query(
+          `INSERT INTO user_subscription_groups
              (user_id, plan_id, platform, provider, group_status, auto_renew)
              VALUES ($1,$2,$3,'free_trial','active',FALSE)
              RETURNING id;`,
-            [user_id, plan_id, platform]
-          )
-        ).rows[0].id;
+          [user_id, plan_id, platform]
+        )
+      ).rows[0].id;
 
     // 4️⃣ Log the renewal entry
     await client.query(
@@ -156,15 +159,17 @@ exports.startFreeTrial = async (req, res) => {
     client.release();
 
     return res.status(200).json({
-      success: true,
+      status: true,
       message: `Free trial started for ${trial_days} days`,
-      expires_on: expiry_date,
+      data: {
+        expires_on: expiry_date,
+      }
     });
   } catch (err) {
     await client.query('ROLLBACK');
     client.release();
     console.error('❌ Error starting trial:', err.message);
-    return res.status(500).json({ success: false, message: err.message });
+    return res.status(500).json({ status: false, message: err.message });
   }
 };
 
@@ -200,25 +205,27 @@ exports.getCurrentSubscription = async (req, res) => {
     // 🧩 If user has no subscription → default to free
     if (result.rows.length === 0) {
       return res.status(200).json({
-        success: true,
+        status: true,
         message: 'No active subscription found. Defaulting to free plan.',
-        plan: {
-          id: null,
-          name: 'Starter Plan',
-          type: 'free',
-          price: 0.0,
-          currency: 'USD',
-          description: 'Browse and view all listed events with limited access.',
-          features: [
-            'Browse and view all listed events',
-            'Select up to 2 event categories',
-            'Booking disabled (Upgrade prompt shown)',
-            'Basic AI-powered search with limited queries'
-          ],
-          duration: null,
-          trial_days: 0,
-          status: 'active',
-          role: 'NDIS Member'
+        data: {
+          plan: {
+            id: null,
+            name: 'Starter Plan',
+            type: 'free',
+            price: 0.0,
+            currency: 'USD',
+            description: 'Browse and view all listed events with limited access.',
+            features: [
+              'Browse and view all listed events',
+              'Select up to 2 event categories',
+              'Booking disabled (Upgrade prompt shown)',
+              'Basic AI-powered search with limited queries'
+            ],
+            duration: null,
+            trial_days: 0,
+            status: 'active',
+            role: 'NDIS Member'
+          }
         }
       });
     }
@@ -232,29 +239,31 @@ exports.getCurrentSubscription = async (req, res) => {
 
     // 🧾 Response structure
     return res.status(200).json({
-      success: true,
+      status: true,
       message: 'Current subscription fetched successfully.',
-      user_id,
-      role: plan.audience_role,
-      plan: {
-        id: plan.plan_id,
-        name: plan.plan_name,
-        type: plan.plan_type,
-        price: plan.price,
-        currency: plan.currency,
-        description: plan.description,
-        features: plan.features,
-        duration: plan.duration,
-        trial_days: plan.trial_days,
-        expires_on: plan.expiry_date,
-        status: currentStatus,
-        is_active: plan.is_active
+      data: {
+        user_id,
+        role: plan.audience_role,
+        plan: {
+          id: plan.plan_id,
+          name: plan.plan_name,
+          type: plan.plan_type,
+          price: plan.price,
+          currency: plan.currency,
+          description: plan.description,
+          features: plan.features,
+          duration: plan.duration,
+          trial_days: plan.trial_days,
+          expires_on: plan.expiry_date,
+          status: currentStatus,
+          is_active: plan.is_active
+        }
       }
     });
   } catch (err) {
     console.error('❌ Error fetching current subscription:', err.message);
     return res.status(500).json({
-      success: false,
+      status: false,
       message: 'Error fetching current subscription',
       error: err.message
     });

@@ -44,397 +44,225 @@ async function getEmbedding(query) {
   }
 }
 
+// Perplexity search fallback for upcoming events
+async function searchWithPerplexity(query, category, location, startDate) {
+  try {
+    const now = new Date();
+    const currentDateTime = now.toISOString();
+    
+    let searchQuery = `Find ONLY upcoming events (events that have not yet started or are currently happening) related to "${query}"`;
+    
+    if (startDate) {
+      const formattedStartDate = new Date(startDate).toISOString();
+      searchQuery += ` starting from ${formattedStartDate} or later`;
+    } else {
+      searchQuery += ` starting from ${currentDateTime} or later (including events happening later today)`;
+    }
+    
+    if (category && Array.isArray(category) && category.length > 0) {
+      searchQuery += ` in categories: ${category.join(', ')}`;
+    }
+    
+    if (location) {
+      searchQuery += ` near ${location.suburb || location.state || 'Australia'}`;
+    } else {
+      searchQuery += ` in Australia`;
+    }
+    
+    searchQuery += `. IMPORTANT: Include events happening later today. Do NOT include events that have already ended. Provide event details including title, description, start date and time (in ISO format), location, and website if available.`;
 
-// exports.semanticSearch = async (req, res) => {
+    const response = await axios.post(
+      'https://api.perplexity.ai/chat/completions',
+      {
+        model: 'sonar',
+        messages: [
+          {
+            role: 'system',
+            content: `You are a helpful assistant that finds upcoming event information. Current date and time is ${currentDateTime}. Return structured data ONLY about future/upcoming events (including events later today) in JSON format with fields: title, description, start_date (ISO format with time if available), location, website, category. Include events that haven't started yet, even if they are today.`
+          },
+          {
+            role: 'user',
+            content: searchQuery
+          }
+        ],
+        temperature: 0.2,
+        max_tokens: 2000
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${process.env.PERPLEXITY_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
 
-//   const { query, category, start_date, latitude, longitude, radius } = req.query;
-//   const userId = req.user?.userId;
-
-//   if (!query) {
-//     return res.status(400).json({
-//       status: false,
-//       error: 'Missing query parameter',
-//       statusCode: 400
-//     });
-//   }
-
-//   try {
-//     const embedding = await getEmbedding(query);
-//     console.log(embedding, "embedding");
-
-//     if (!embedding) {
-//       return res.status(500).json({
-//         status: false,
-//         error: 'Embedding generation failed',
-//         statusCode: 500
-//       });
-//     }
-
-//     // Get user preferences
-//     let hasPreferences = false;
-//     let preferredTypes = [];
-
-//     if (userId) {
-//       try {
-//         const userPreferencesResult = await pool.query(
-//           `SELECT preferred_event_types FROM ndis_information WHERE user_id = $1`,
-//           [userId]
-//         );
-//         if (
-//           userPreferencesResult.rows.length > 0 &&
-//           Array.isArray(userPreferencesResult.rows[0].preferred_event_types) &&
-//           userPreferencesResult.rows[0].preferred_event_types.length > 0
-//         ) {
-//           hasPreferences = true;
-//           preferredTypes = userPreferencesResult.rows[0].preferred_event_types;
-//         }
-//       } catch (prefErr) {
-//         console.error('Failed to read user preferences, falling back to all events:', prefErr.message);
-//       }
-//     }
-
-//     // Declare result variable outside the conditional blocks
-//     let result;
-
-//     // Approach 1: Simple bounding box in SQL (most reliable)
-//     if (latitude && longitude && radius) {
-//       const lat = parseFloat(latitude);
-//       const lng = parseFloat(longitude);
-//       const radiusKm = parseFloat(radius);
-
-//       if (isNaN(lat) || isNaN(lng) || isNaN(radiusKm)) {
-//         return res.status(400).json({
-//           error: 'Invalid location parameters',
-//           statusCode: 400
-//         });
-//       }
-
-//       // Calculate bounding box (approximate)
-//       const latDelta = radiusKm / 111.0; // 1 degree lat ≈ 111 km
-//       const lngDelta = radiusKm / (111.0 * Math.cos(lat * Math.PI / 180));
-
-//       const minLat = lat - latDelta;
-//       const maxLat = lat + latDelta;
-//       const minLng = lng - lngDelta;
-//       const maxLng = lng + lngDelta;
-
-//       let sqlQuery;
-//       let queryParams;
-
-//       if (category) {
-//         const categories = Array.isArray(category) ? category : [category];
-//         if (start_date) {
-//           // With category and date
-//           sqlQuery = `
-//             SELECT 
-//               id, title, description, start_date, end_date, suburb, state, postcode,
-//               latitude, longitude, category, image_url, website,
-//               embedding <=> $1 AS similarity,
-//               CASE 
-//                 WHEN LOWER(title) ILIKE LOWER($2) OR LOWER(description) ILIKE LOWER($2) 
-//                 THEN true ELSE false 
-//               END as has_exact_keywords
-//             FROM events
-//             WHERE embedding IS NOT NULL 
-//               AND start_date > NOW()
-//               AND start_date >= $3
-//               AND category && $4
-//               AND latitude BETWEEN $5 AND $6
-//               AND longitude BETWEEN $7 AND $8
-//               AND embedding <=> $1 < 0.3
-//             ORDER BY has_exact_keywords DESC, similarity ASC
-//             LIMIT 50
-//           `;
-//           queryParams = [toPgVectorString(embedding), `%${query}%`, new Date(start_date), categories, minLat, maxLat, minLng, maxLng];
-//         } else {
-//           // With category only
-//           sqlQuery = `
-//             SELECT 
-//               id, title, description, start_date, end_date, suburb, state, postcode,
-//               latitude, longitude, category, image_url, website,
-//               embedding <=> $1 AS similarity,
-//               CASE 
-//                 WHEN LOWER(title) ILIKE LOWER($2) OR LOWER(description) ILIKE LOWER($2) 
-//                 THEN true ELSE false 
-//               END as has_exact_keywords
-//             FROM events
-//             WHERE embedding IS NOT NULL 
-//               AND start_date > NOW()
-//               AND category && $3
-//               AND latitude BETWEEN $4 AND $5
-//               AND longitude BETWEEN $6 AND $7
-//               AND embedding <=> $1 < 0.3
-//             ORDER BY has_exact_keywords DESC, similarity ASC
-//             LIMIT 50
-//           `;
-//           queryParams = [toPgVectorString(embedding), `%${query}%`, categories, minLat, maxLat, minLng, maxLng];
-//         }
-//       } else if (hasPreferences) {
-//         if (start_date) {
-//           // With preferences and date
-//           sqlQuery = `
-//             SELECT 
-//               id, title, description, start_date, end_date, suburb, state, postcode,
-//               latitude, longitude, category, image_url, website,
-//               embedding <=> $1 AS similarity,
-//               CASE 
-//                 WHEN LOWER(title) ILIKE LOWER($2) OR LOWER(description) ILIKE LOWER($2) 
-//                 THEN true ELSE false 
-//               END as has_exact_keywords
-//             FROM events
-//             WHERE embedding IS NOT NULL 
-//               AND start_date > NOW()
-//               AND start_date >= $3
-//               AND category && $4
-//               AND latitude BETWEEN $5 AND $6
-//               AND longitude BETWEEN $7 AND $8
-//               AND embedding <=> $1 < 0.3
-//             ORDER BY has_exact_keywords DESC, similarity ASC
-//             LIMIT 50
-//           `;
-//           queryParams = [toPgVectorString(embedding), `%${query}%`, new Date(start_date), preferredTypes, minLat, maxLat, minLng, maxLng];
-//         } else {
-//           // With preferences only
-//           sqlQuery = `
-//             SELECT 
-//               id, title, description, start_date, end_date, suburb, state, postcode,
-//               latitude, longitude, category, image_url, website,
-//               embedding <=> $1 AS similarity,
-//               CASE 
-//                 WHEN LOWER(title) ILIKE LOWER($2) OR LOWER(description) ILIKE LOWER($2) 
-//                 THEN true ELSE false 
-//               END as has_exact_keywords
-//             FROM events
-//             WHERE embedding IS NOT NULL 
-//               AND start_date > NOW()
-//               AND category && $3
-//               AND latitude BETWEEN $4 AND $5
-//               AND longitude BETWEEN $6 AND $7
-//               AND embedding <=> $1 < 0.3
-//             ORDER BY has_exact_keywords DESC, similarity ASC
-//             LIMIT 50
-//           `;
-//           queryParams = [toPgVectorString(embedding), `%${query}%`, preferredTypes, minLat, maxLat, minLng, maxLng];
-//         }
-//       } else {
-//         if (start_date) {
-//           // With date only
-//           sqlQuery = `
-//             SELECT 
-//               id, title, description, start_date, end_date, suburb, state, postcode,
-//               latitude, longitude, category, image_url, website,
-//               embedding <=> $1 AS similarity,
-//               CASE 
-//                 WHEN LOWER(title) ILIKE LOWER($2) OR LOWER(description) ILIKE LOWER($2) 
-//                 THEN true ELSE false 
-//               END as has_exact_keywords
-//             FROM events
-//             WHERE embedding IS NOT NULL 
-//               AND start_date > NOW()
-//               AND start_date >= $3
-//               AND latitude BETWEEN $4 AND $5
-//               AND longitude BETWEEN $6 AND $7
-//               AND embedding <=> $1 < 0.3
-//             ORDER BY has_exact_keywords DESC, similarity ASC
-//             LIMIT 50
-//           `;
-//           queryParams = [toPgVectorString(embedding), `%${query}%`, new Date(start_date), minLat, maxLat, minLng, maxLng];
-//         } else {
-//           // Location only
-//           sqlQuery = `
-//             SELECT 
-//               id, title, description, start_date, end_date, suburb, state, postcode,
-//               latitude, longitude, category, image_url, website,
-//               embedding <=> $1 AS similarity,
-//               CASE 
-//                 WHEN LOWER(title) ILIKE LOWER($2) OR LOWER(description) ILIKE LOWER($2) 
-//                 THEN true ELSE false 
-//               END as has_exact_keywords
-//             FROM events
-//             WHERE embedding IS NOT NULL 
-//               AND start_date > NOW()
-//               AND latitude BETWEEN $3 AND $4
-//               AND longitude BETWEEN $5 AND $6
-//               AND embedding <=> $1 < 0.3
-//             ORDER BY has_exact_keywords DESC, similarity ASC
-//             LIMIT 50
-//           `;
-//           queryParams = [toPgVectorString(embedding), `%${query}%`, minLat, maxLat, minLng, maxLng];
-//         }
-//       }
-
-//       result = await pool.query(sqlQuery, queryParams);
-
-//       // Calculate precise distances and filter
-//       const eventsWithDistance = result.rows.map(event => {
-//         const R = 6371; // Earth radius in km
-//         const dLat = (event.latitude - lat) * Math.PI / 180;
-//         const dLng = (event.longitude - lng) * Math.PI / 180;
-//         const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-//           Math.cos(lat * Math.PI / 180) * Math.cos(event.latitude * Math.PI / 180) *
-//           Math.sin(dLng / 2) * Math.sin(dLng / 2);
-//         const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-//         const distance = R * c;
-
-//         return {
-//           ...event,
-//           distance_km: Math.round(distance * 10) / 10
-//         };
-//       }).filter(event => event.distance_km <= radiusKm);
-
-//       // Sort by distance within similarity groups
-//       eventsWithDistance.sort((a, b) => {
-//         if (a.has_exact_keywords !== b.has_exact_keywords) {
-//           return b.has_exact_keywords - a.has_exact_keywords;
-//         }
-//         if (Math.abs(a.similarity - b.similarity) > 0.01) {
-//           return a.similarity - b.similarity;
-//         }
-//         return a.distance_km - b.distance_km;
-//       });
-
-//       result.rows = eventsWithDistance;
-
-//     } else {
-//       // No location filter - original logic
-//       let sqlQuery = `
-//         SELECT 
-//           id, title, description, start_date, end_date, suburb, state, postcode,
-//           latitude, longitude, category, image_url, website,
-//           embedding <=> $1 AS similarity,
-//           CASE 
-//             WHEN LOWER(title) ILIKE LOWER($2) OR LOWER(description) ILIKE LOWER($2) 
-//             THEN true ELSE false 
-//           END as has_exact_keywords
-//         FROM events
-//         WHERE embedding IS NOT NULL 
-//           AND start_date > NOW()
-//           AND embedding <=> $1 < 0.3
-//       `;
-
-//       let queryParams = [toPgVectorString(embedding), `%${query}%`];
-
-//       if (category) {
-//         const categories = Array.isArray(category) ? category : [category];
-//         sqlQuery += ` AND category && $3`;
-//         queryParams.push(categories);
-//       } else if (hasPreferences) {
-//         sqlQuery += ` AND category && $3`;
-//         queryParams.push(preferredTypes);
-//       }
-
-//       if (start_date) {
-//         const paramIndex = queryParams.length + 1;
-//         sqlQuery += ` AND start_date >= $${paramIndex}`;
-//         queryParams.push(new Date(start_date));
-//       }
-
-//       sqlQuery += ` ORDER BY has_exact_keywords DESC, similarity ASC LIMIT 50`;
-
-//       result = await pool.query(sqlQuery, queryParams);
-
-//       // Add null distance for consistency
-//       result.rows.forEach(row => {
-//         row.distance_km = null;
-//       });
-//     }
+    const content = response.data.choices[0].message.content;
+    
+    // Parse the response and format it to match your database structure
+    return parsePerplexityResponse(content, query, startDate);
+  } catch (err) {
+    console.error('❌ Perplexity search failed:', err.message);
+    return null;
+  }
+}
 
 
-//     if (result.rows.length === 0) {
-//       return res.status(404).json({
-//         status: false,
-//         error: 'No similar events found',
-//       });
-//     }
 
-//     // Apply improved filtering logic
-//     const bestSimilarity = result.rows[0].similarity;
-//     const hasExactKeywordMatch = result.rows.some(row => row.has_exact_keywords);
-//     let finalResults = [];
+// Parse Perplexity response to match database format
+function parsePerplexityResponse(content, originalQuery, startDate) {
+  try {
+    const now = new Date(); // Current date AND time
+    const filterDate = startDate ? new Date(startDate) : now;
+    
+    let events = [];
+    
+    // Try multiple JSON extraction methods
+    // Method 1: Look for JSON array
+    let jsonMatch = content.match(/\[\s*\{[\s\S]*?\}\s*\]/);
+    
+    // Method 2: Look for code blocks with JSON
+    if (!jsonMatch) {
+      jsonMatch = content.match(/```(?:json)?\s*(\[\s*\{[\s\S]*?\}\s*\])\s*```/);
+      if (jsonMatch) jsonMatch[0] = jsonMatch[1];
+    }
+    
+    // Method 3: Extract everything between first [ and last ]
+    if (!jsonMatch) {
+      const firstBracket = content.indexOf('[');
+      const lastBracket = content.lastIndexOf(']');
+      if (firstBracket !== -1 && lastBracket !== -1 && lastBracket > firstBracket) {
+        jsonMatch = [content.substring(firstBracket, lastBracket + 1)];
+      }
+    }
+    
+    if (jsonMatch) {
+      try {
+        const jsonString = jsonMatch[0].trim();
+        events = JSON.parse(jsonString);
+        console.log('Successfully parsed JSON from Perplexity response');
+      } catch (parseErr) {
+        console.error('JSON parse error:', parseErr.message);
+        console.log('Attempted to parse:', jsonMatch[0].substring(0, 200));
+      }
+    }
+    
+    // If no valid JSON found or parsing failed, create a text-based response
+    if (!Array.isArray(events) || events.length === 0) {
+      console.log('No valid JSON array found, creating text-based response');
+      events = [{
+        id: 'perplexity-1',
+        title: `Events related to "${originalQuery}"`,
+        description: content.substring(0, 500).replace(/```json|```|\[|\]/g, '').trim(),
+        start_date: null,
+        end_date: null,
+        suburb: null,
+        state: null,
+        postcode: null,
+        latitude: null,
+        longitude: null,
+        category: ['General'],
+        image_url: null,
+        website: null,
+        source: 'perplexity',
+        similarity: 0,
+        distance_km: null
+      }];
+    }
 
-//     const isVeryExactSemantic = bestSimilarity < 0.05;
+    // Format events and filter out past events
+    const formattedEvents = events.map((event, index) => ({
+      id: event.id || `perplexity-${index + 1}`,
+      title: event.title || 'Event Information',
+      description: event.description || '',
+      start_date: event.start_date || event.date || null,
+      end_date: event.end_date || null,
+      suburb: event.suburb || event.location?.suburb || null,
+      state: event.state || event.location?.state || null,
+      postcode: event.postcode || event.location?.postcode || null,
+      latitude: event.latitude || null,
+      longitude: event.longitude || null,
+      category: Array.isArray(event.category) ? event.category : [event.category || 'General'],
+      image_url: event.image_url || null,
+      website: event.website || event.url || null,
+      source: 'perplexity',
+      similarity: 0,
+      distance_km: null
+    }));
 
-//     if (hasExactKeywordMatch) {
-//       console.log(`Exact keyword match found. Prioritizing keyword matches.`);
-//       const keywordMatches = result.rows.filter(row => row.has_exact_keywords);
-//       //finalResults = keywordMatches.slice(0, 3);
-//       finalResults = keywordMatches;
+    // Filter out past events - only include upcoming events (considering time)
+    const upcomingEvents = formattedEvents.filter(event => {
+      if (!event.start_date) {
+        // If no date, keep it (might be general info)
+        return true;
+      }
+      
+      try {
+        const eventDate = new Date(event.start_date);
+        // Compare with full datetime, not just date
+        return eventDate >= filterDate;
+      } catch (err) {
+        console.error('Failed to parse event date:', event.start_date);
+        return false;
+      }
+    });
 
-//       if (finalResults.length < 5 && isVeryExactSemantic) {
-//         const additionalResults = result.rows
-//           .filter(row => !row.has_exact_keywords && row.similarity < 0.08)
-//           .slice(0, 5 - finalResults.length);
-//         finalResults = [...finalResults, ...additionalResults];
-//       }
-//     } else if (isVeryExactSemantic) {
-//       console.log(`Exact semantic match detected (similarity: ${bestSimilarity}). Showing only exact matches.`);
-//       finalResults = result.rows.filter(row => row.similarity < 0.08);
-//       // finalResults = finalResults.slice(0, 5);
-//     } else {
-//       // NEW LOGIC: Don't return results if no exact keyword matches found
-//       console.log(`No exact keyword matches found and semantic similarity not strong enough. No results returned.`);
-//       return res.status(404).json({
-//         status: false,
-//         error: 'No events found matching your search query',
-//         statusCode: 404,
-//         message: 'Try searching with different keywords or check your spelling'
-//       });
-//     }
+    console.log(`Filtered ${formattedEvents.length} Perplexity events to ${upcomingEvents.length} upcoming events`);
+    return upcomingEvents;
+    
+  } catch (err) {
+    console.error('Failed to parse Perplexity response:', err.message);
+    console.log('Raw content preview:', content.substring(0, 300));
+    return [];
+  }
+}
 
-//     // Only return results if we have meaningful matches
-//     if (finalResults.length === 0) {
-//       return res.status(404).json({
-//         status: false,
-//         error: 'No relevant events found for your search',
-//         statusCode: 404
-//       });
-//     }
 
-//     console.log(`Found ${result.rows.length} total results, returning ${finalResults.length} high-quality matches`);
-//     res.json({ status: true, data: finalResults });
 
-//   } catch (err) {
-//     console.error('❌ Semantic search error:', err.message);
-//     res.status(500).json({ status: false, error: 'Internal Server Error' });
-//   }
-// };
+// New code with pagination and perplexity fallback
+
 exports.semanticSearch = async (req, res) => {
-  const {
-    query,
-    category,
-    start_date,
-    latitude,
-    longitude,
-    radius,
-    page = 1,
-    limit = 50,
-  } = req.query;
 
-  const userId = req.user?.userId;
+   const { query, category, start_date, latitude, longitude, radius, page = 1, limit = 10 } = req.query;
+   const userId = req.user?.userId;
 
-  const safePage = Math.max(parseInt(page, 10) || 1, 1);
-  const safeLimit = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
-  const offset = (safePage - 1) * safeLimit;
+  if (!query) {
+    return res.status(400).json({
+      error: 'Missing query parameter',
+      statusCode: 400
+    });
+  }
 
-  let embedding = [];
-  const hasQuery = query && query.trim();
+  // Validate pagination parameters
+  const pageNum = parseInt(page, 10);
+  const limitNum = parseInt(limit, 10);
+  
+  if (isNaN(pageNum) || pageNum < 1) {
+    return res.status(400).json({
+      error: 'Invalid page parameter. Must be a positive integer.',
+      statusCode: 400
+    });
+  }
+  
+  if (isNaN(limitNum) || limitNum < 1 || limitNum > 100) {
+    return res.status(400).json({
+      error: 'Invalid limit parameter. Must be between 1 and 100.',
+      statusCode: 400
+    });
+  }
 
-  if (hasQuery) {
-    embedding = await getEmbedding(query);
+  const offset = (pageNum - 1) * limitNum;
+
+  try {
+    const embedding = await getEmbedding(query);
     console.log(embedding, "embedding");
 
     if (!embedding) {
       return res.status(500).json({
-        status: false,
-        error: "Embedding generation failed",
-        statusCode: 500,
+        error: 'Embedding generation failed',
+        statusCode: 500
       });
     }
-  } else {
-    console.log("No query provided — skipping embedding generation.");
-  }
 
-  try {
     // Get user preferences
     let hasPreferences = false;
     let preferredTypes = [];
@@ -454,191 +282,497 @@ exports.semanticSearch = async (req, res) => {
           preferredTypes = userPreferencesResult.rows[0].preferred_event_types;
         }
       } catch (prefErr) {
-        console.error("Failed to read user preferences:", prefErr.message);
+        console.error('Failed to read user preferences, falling back to all events:', prefErr.message);
       }
     }
 
+    // Declare result variable outside the conditional blocks
     let result;
+    let countResult;
 
-    // 🧭 LOCATION FILTER
+    // Approach 1: Simple bounding box in SQL (most reliable)
     if (latitude && longitude && radius) {
       const lat = parseFloat(latitude);
       const lng = parseFloat(longitude);
       const radiusKm = parseFloat(radius);
-
+      
       if (isNaN(lat) || isNaN(lng) || isNaN(radiusKm)) {
-        return res.status(400).json({ error: "Invalid location parameters" });
+        return res.status(400).json({
+          error: 'Invalid location parameters',
+          statusCode: 400
+        });
       }
 
-      const latDelta = radiusKm / 111.0;
+      // Calculate bounding box (approximate)
+      const latDelta = radiusKm / 111.0; // 1 degree lat ≈ 111 km
       const lngDelta = radiusKm / (111.0 * Math.cos(lat * Math.PI / 180));
+
       const minLat = lat - latDelta;
       const maxLat = lat + latDelta;
       const minLng = lng - lngDelta;
       const maxLng = lng + lngDelta;
 
-      // ---- Dynamic SQL Start ----
-      let sqlQuery = `
-        SELECT 
-          id, title, description, start_date, end_date, suburb, state, postcode,
-          latitude, longitude, category, image_url, website
-      `;
-
-      if (hasQuery) {
-        sqlQuery += `,
-          embedding <=> $1 AS similarity,
-          CASE 
-            WHEN LOWER(title) ILIKE LOWER($2) OR LOWER(description) ILIKE LOWER($2) 
-            THEN true ELSE false 
-          END as has_exact_keywords
-        `;
-      }
-
-      sqlQuery += ` FROM events WHERE start_date > NOW()`;
-
-      // Base query params
-      let queryParams = [];
-      let paramIndex = 1;
-
-      if (hasQuery) {
-        queryParams.push(toPgVectorString(embedding), `%${query}%`);
-        paramIndex = 3;
-      }
+      let sqlQuery;
+      let countQuery;
+      let queryParams;
+      let countParams;
 
       if (category) {
         const categories = Array.isArray(category) ? category : [category];
-        sqlQuery += ` AND category && $${paramIndex++}`;
-        queryParams.push(categories);
+        if (start_date) {
+          // With category and date
+          sqlQuery = `
+            SELECT 
+              id, title, description, start_date, end_date, suburb, state, postcode,
+              latitude, longitude, category, image_url, website,
+              embedding <=> $1 AS similarity,
+              CASE 
+                WHEN LOWER(title) ILIKE LOWER($2) OR LOWER(description) ILIKE LOWER($2) 
+                THEN true ELSE false 
+              END as has_exact_keywords
+            FROM events
+            WHERE embedding IS NOT NULL 
+              AND start_date > NOW()
+              AND start_date >= $3
+              AND category && $4
+              AND latitude BETWEEN $5 AND $6
+              AND longitude BETWEEN $7 AND $8
+              AND embedding <=> $1 < 0.3
+            ORDER BY has_exact_keywords DESC, similarity ASC
+            LIMIT $9 OFFSET $10
+          `;
+          countQuery = `
+            SELECT COUNT(*) as total
+            FROM events
+            WHERE embedding IS NOT NULL 
+              AND start_date > NOW()
+              AND start_date >= $3
+              AND category && $4
+              AND latitude BETWEEN $5 AND $6
+              AND longitude BETWEEN $7 AND $8
+              AND embedding <=> $1 < 0.3
+          `;
+          queryParams = [toPgVectorString(embedding), `%${query}%`, new Date(start_date), categories, minLat, maxLat, minLng, maxLng, limitNum, offset];
+          countParams = [toPgVectorString(embedding), `%${query}%`, new Date(start_date), categories, minLat, maxLat, minLng, maxLng];
+        } else {
+          // With category only
+          sqlQuery = `
+            SELECT 
+              id, title, description, start_date, end_date, suburb, state, postcode,
+              latitude, longitude, category, image_url, website,
+              embedding <=> $1 AS similarity,
+              CASE 
+                WHEN LOWER(title) ILIKE LOWER($2) OR LOWER(description) ILIKE LOWER($2) 
+                THEN true ELSE false 
+              END as has_exact_keywords
+            FROM events
+            WHERE embedding IS NOT NULL 
+              AND start_date > NOW()
+              AND category && $3
+              AND latitude BETWEEN $4 AND $5
+              AND longitude BETWEEN $6 AND $7
+              AND embedding <=> $1 < 0.3
+            ORDER BY has_exact_keywords DESC, similarity ASC
+            LIMIT $8 OFFSET $9
+          `;
+          countQuery = `
+            SELECT COUNT(*) as total
+            FROM events
+            WHERE embedding IS NOT NULL 
+              AND start_date > NOW()
+              AND category && $3
+              AND latitude BETWEEN $4 AND $5
+              AND longitude BETWEEN $6 AND $7
+              AND embedding <=> $1 < 0.3
+          `;
+          queryParams = [toPgVectorString(embedding), `%${query}%`, categories, minLat, maxLat, minLng, maxLng, limitNum, offset];
+          countParams = [toPgVectorString(embedding), `%${query}%`, categories, minLat, maxLat, minLng, maxLng];
+        }
       } else if (hasPreferences) {
-        sqlQuery += ` AND category && $${paramIndex++}`;
-        queryParams.push(preferredTypes);
+        if (start_date) {
+          // With preferences and date
+          sqlQuery = `
+            SELECT 
+              id, title, description, start_date, end_date, suburb, state, postcode,
+              latitude, longitude, category, image_url, website,
+              embedding <=> $1 AS similarity,
+              CASE 
+                WHEN LOWER(title) ILIKE LOWER($2) OR LOWER(description) ILIKE LOWER($2) 
+                THEN true ELSE false 
+              END as has_exact_keywords
+            FROM events
+            WHERE embedding IS NOT NULL 
+              AND start_date > NOW()
+              AND start_date >= $3
+              AND category && $4
+              AND latitude BETWEEN $5 AND $6
+              AND longitude BETWEEN $7 AND $8
+              AND embedding <=> $1 < 0.3
+            ORDER BY has_exact_keywords DESC, similarity ASC
+            LIMIT $9 OFFSET $10
+          `;
+          countQuery = `
+            SELECT COUNT(*) as total
+            FROM events
+            WHERE embedding IS NOT NULL 
+              AND start_date > NOW()
+              AND start_date >= $3
+              AND category && $4
+              AND latitude BETWEEN $5 AND $6
+              AND longitude BETWEEN $7 AND $8
+              AND embedding <=> $1 < 0.3
+          `;
+          queryParams = [toPgVectorString(embedding), `%${query}%`, new Date(start_date), preferredTypes, minLat, maxLat, minLng, maxLng, limitNum, offset];
+          countParams = [toPgVectorString(embedding), `%${query}%`, new Date(start_date), preferredTypes, minLat, maxLat, minLng, maxLng];
+        } else {
+          // With preferences only
+          sqlQuery = `
+            SELECT 
+              id, title, description, start_date, end_date, suburb, state, postcode,
+              latitude, longitude, category, image_url, website,
+              embedding <=> $1 AS similarity,
+              CASE 
+                WHEN LOWER(title) ILIKE LOWER($2) OR LOWER(description) ILIKE LOWER($2) 
+                THEN true ELSE false 
+              END as has_exact_keywords
+            FROM events
+            WHERE embedding IS NOT NULL 
+              AND start_date > NOW()
+              AND category && $3
+              AND latitude BETWEEN $4 AND $5
+              AND longitude BETWEEN $6 AND $7
+              AND embedding <=> $1 < 0.3
+            ORDER BY has_exact_keywords DESC, similarity ASC
+            LIMIT $8 OFFSET $9
+          `;
+          countQuery = `
+            SELECT COUNT(*) as total
+            FROM events
+            WHERE embedding IS NOT NULL 
+              AND start_date > NOW()
+              AND category && $3
+              AND latitude BETWEEN $4 AND $5
+              AND longitude BETWEEN $6 AND $7
+              AND embedding <=> $1 < 0.3
+          `;
+          queryParams = [toPgVectorString(embedding), `%${query}%`, preferredTypes, minLat, maxLat, minLng, maxLng, limitNum, offset];
+          countParams = [toPgVectorString(embedding), `%${query}%`, preferredTypes, minLat, maxLat, minLng, maxLng];
+        }
+      } else {
+        if (start_date) {
+          // With date only
+          sqlQuery = `
+            SELECT 
+              id, title, description, start_date, end_date, suburb, state, postcode,
+              latitude, longitude, category, image_url, website,
+              embedding <=> $1 AS similarity,
+              CASE 
+                WHEN LOWER(title) ILIKE LOWER($2) OR LOWER(description) ILIKE LOWER($2) 
+                THEN true ELSE false 
+              END as has_exact_keywords
+            FROM events
+            WHERE embedding IS NOT NULL 
+              AND start_date > NOW()
+              AND start_date >= $3
+              AND latitude BETWEEN $4 AND $5
+              AND longitude BETWEEN $6 AND $7
+              AND embedding <=> $1 < 0.3
+            ORDER BY has_exact_keywords DESC, similarity ASC
+            LIMIT $8 OFFSET $9
+          `;
+          countQuery = `
+            SELECT COUNT(*) as total
+            FROM events
+            WHERE embedding IS NOT NULL 
+              AND start_date > NOW()
+              AND start_date >= $3
+              AND latitude BETWEEN $4 AND $5
+              AND longitude BETWEEN $6 AND $7
+              AND embedding <=> $1 < 0.3
+          `;
+          queryParams = [toPgVectorString(embedding), `%${query}%`, new Date(start_date), minLat, maxLat, minLng, maxLng, limitNum, offset];
+          countParams = [toPgVectorString(embedding), `%${query}%`, new Date(start_date), minLat, maxLat, minLng, maxLng];
+        } else {
+          // Location only
+          sqlQuery = `
+            SELECT 
+              id, title, description, start_date, end_date, suburb, state, postcode,
+              latitude, longitude, category, image_url, website,
+              embedding <=> $1 AS similarity,
+              CASE 
+                WHEN LOWER(title) ILIKE LOWER($2) OR LOWER(description) ILIKE LOWER($2) 
+                THEN true ELSE false 
+              END as has_exact_keywords
+            FROM events
+            WHERE embedding IS NOT NULL 
+              AND start_date > NOW()
+              AND latitude BETWEEN $3 AND $4
+              AND longitude BETWEEN $5 AND $6
+              AND embedding <=> $1 < 0.3
+            ORDER BY has_exact_keywords DESC, similarity ASC
+            LIMIT $7 OFFSET $8
+          `;
+          countQuery = `
+            SELECT COUNT(*) as total
+            FROM events
+            WHERE embedding IS NOT NULL 
+              AND start_date > NOW()
+              AND latitude BETWEEN $3 AND $4
+              AND longitude BETWEEN $5 AND $6
+              AND embedding <=> $1 < 0.3
+          `;
+          queryParams = [toPgVectorString(embedding), `%${query}%`, minLat, maxLat, minLng, maxLng, limitNum, offset];
+          countParams = [toPgVectorString(embedding), `%${query}%`, minLat, maxLat, minLng, maxLng];
+        }
       }
 
-      if (start_date) {
-        sqlQuery += ` AND start_date >= $${paramIndex++}`;
-        queryParams.push(new Date(start_date));
-      }
-
-      sqlQuery += `
-        AND latitude BETWEEN $${paramIndex++} AND $${paramIndex++}
-        AND longitude BETWEEN $${paramIndex++} AND $${paramIndex++}
-      `;
-      queryParams.push(minLat, maxLat, minLng, maxLng);
-
-      if (hasQuery) sqlQuery += ` AND embedding <=> $1 < 0.3`;
-
-      // 🧮 Count total
-      const countQuery = `SELECT COUNT(*) AS total FROM (${sqlQuery}) AS sub`;
-      const totalRes = await pool.query(countQuery, queryParams);
-      const total = parseInt(totalRes.rows[0].total, 10);
-
-      // 🧭 Pagination
-      sqlQuery += hasQuery
-        ? ` ORDER BY has_exact_keywords DESC, similarity ASC LIMIT $${paramIndex++} OFFSET $${paramIndex++}`
-        : ` ORDER BY start_date ASC LIMIT $${paramIndex++} OFFSET $${paramIndex++}`;
-      queryParams.push(safeLimit, offset);
-
-      // ---- Dynamic SQL End ----
+      console.log('Executing location query with', queryParams.length, 'parameters');
       result = await pool.query(sqlQuery, queryParams);
+      countResult = await pool.query(countQuery, countParams);
 
-      // Compute distance
-      const eventsWithDistance = result.rows
-        .map((event) => {
-          const R = 6371;
-          const dLat = (event.latitude - lat) * Math.PI / 180;
-          const dLng = (event.longitude - lng) * Math.PI / 180;
-          const a =
-            Math.sin(dLat / 2) ** 2 +
-            Math.cos(lat * Math.PI / 180) *
-              Math.cos(event.latitude * Math.PI / 180) *
-              Math.sin(dLng / 2) ** 2;
-          const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-          const distance = R * c;
-          return { ...event, distance_km: Math.round(distance * 10) / 10 };
-        })
-        .filter((e) => e.distance_km <= radiusKm);
+      // Calculate precise distances and filter
+      const eventsWithDistance = result.rows.map(event => {
+        const R = 6371; // Earth radius in km
+        const dLat = (event.latitude - lat) * Math.PI / 180;
+        const dLng = (event.longitude - lng) * Math.PI / 180;
+        const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                 Math.cos(lat * Math.PI / 180) * Math.cos(event.latitude * Math.PI / 180) * 
+                 Math.sin(dLng/2) * Math.sin(dLng/2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        const distance = R * c;
+        
+        return {
+          ...event,
+          distance_km: Math.round(distance * 10) / 10
+        };
+      }).filter(event => event.distance_km <= radiusKm);
+
+      // Sort by distance within similarity groups
+      eventsWithDistance.sort((a, b) => {
+        if (a.has_exact_keywords !== b.has_exact_keywords) {
+          return b.has_exact_keywords - a.has_exact_keywords;
+        }
+        if (Math.abs(a.similarity - b.similarity) > 0.01) {
+          return a.similarity - b.similarity;
+        }
+        return a.distance_km - b.distance_km;
+      });
 
       result.rows = eventsWithDistance;
 
-      return res.json({
-        status: true,
-        pagination: {
-          page: safePage,
-          limit: safeLimit,
-          total,
-          totalPages: Math.ceil(total / safeLimit),
-        },
-        data: result.rows,
-      });
     } else {
-      // 🧠 NO LOCATION FILTER
+      // No location filter - original logic
       let sqlQuery = `
         SELECT 
           id, title, description, start_date, end_date, suburb, state, postcode,
-          latitude, longitude, category, image_url, website
-      `;
-
-      if (hasQuery) {
-        sqlQuery += `,
+          latitude, longitude, category, image_url, website,
           embedding <=> $1 AS similarity,
           CASE 
             WHEN LOWER(title) ILIKE LOWER($2) OR LOWER(description) ILIKE LOWER($2) 
             THEN true ELSE false 
           END as has_exact_keywords
-        `;
-      }
+        FROM events
+        WHERE embedding IS NOT NULL 
+          AND start_date > NOW()
+          AND embedding <=> $1 < 0.3
+      `;
 
-      sqlQuery += ` FROM events WHERE start_date > NOW()`;
-      let queryParams = [];
-      let paramIndex = 1;
+      let countQuery = `
+        SELECT COUNT(*) as total
+        FROM events
+        WHERE embedding IS NOT NULL 
+          AND start_date > NOW()
+          AND embedding <=> $1 < 0.3
+      `;
 
-      if (hasQuery) {
-        queryParams.push(toPgVectorString(embedding), `%${query}%`);
-        paramIndex = 3;
-      }
+      let queryParams = [toPgVectorString(embedding), `%${query}%`];
+      let countParams = [toPgVectorString(embedding)];
 
       if (category) {
         const categories = Array.isArray(category) ? category : [category];
-        sqlQuery += ` AND category && $${paramIndex++}`;
+        sqlQuery += ` AND category && $3`;
+        countQuery += ` AND category && $2`;
         queryParams.push(categories);
+        countParams.push(categories);
       } else if (hasPreferences) {
-        sqlQuery += ` AND category && $${paramIndex++}`;
+        sqlQuery += ` AND category && $3`;
+        countQuery += ` AND category && $2`;
         queryParams.push(preferredTypes);
+        countParams.push(preferredTypes);
       }
 
       if (start_date) {
-        sqlQuery += ` AND start_date >= $${paramIndex++}`;
+        const paramIndex = queryParams.length + 1;
+        const countParamIndex = countParams.length + 1;
+        sqlQuery += ` AND start_date >= $${paramIndex}`;
+        countQuery += ` AND start_date >= $${countParamIndex}`;
         queryParams.push(new Date(start_date));
+        countParams.push(new Date(start_date));
       }
 
-      if (hasQuery) sqlQuery += ` AND embedding <=> $1 < 0.3`;
+      sqlQuery += ` ORDER BY has_exact_keywords DESC, similarity ASC LIMIT $${queryParams.length + 1} OFFSET $${queryParams.length + 2}`;
+      queryParams.push(limitNum, offset);
 
-      // 🧮 Count total
-      const countQuery = `SELECT COUNT(*) AS total FROM (${sqlQuery}) AS sub`;
-      const totalRes = await pool.query(countQuery, queryParams);
-      const total = parseInt(totalRes.rows[0].total, 10);
-
-      sqlQuery += hasQuery
-        ? ` ORDER BY has_exact_keywords DESC, similarity ASC LIMIT $${paramIndex++} OFFSET $${paramIndex++}`
-        : ` ORDER BY start_date ASC LIMIT $${paramIndex++} OFFSET $${paramIndex++}`;
-      queryParams.push(safeLimit, offset);
-
+      console.log('Executing non-location query with', queryParams.length, 'parameters');
       result = await pool.query(sqlQuery, queryParams);
-      result.rows.forEach((row) => (row.distance_km = null));
-
-      return res.json({
-        status: true,
-        pagination: {
-          page: safePage,
-          limit: safeLimit,
-          total,
-          totalPages: Math.ceil(total / safeLimit),
-        },
-        data: result.rows,
+      countResult = await pool.query(countQuery, countParams);
+      
+      // Add null distance for consistency
+      result.rows.forEach(row => {
+        row.distance_km = null;
       });
     }
+
+    const totalCount = parseInt(countResult.rows[0].total, 10);
+    const totalPages = Math.ceil(totalCount / limitNum);
+
+    if (result.rows.length === 0) {
+      // 🌐 PERPLEXITY FALLBACK: No results found in database
+      console.log('No results found in database. Attempting Perplexity fallback...');
+      
+      const locationInfo = latitude && longitude ? { 
+        suburb: req.query.suburb, 
+        state: req.query.state 
+      } : null;
+      
+      const perplexityResults = await searchWithPerplexity(query, category, locationInfo, start_date);
+      
+      if (perplexityResults && perplexityResults.length > 0) {
+        console.log(`Perplexity returned ${perplexityResults.length} upcoming results`);
+        return res.json({
+          data: perplexityResults,
+          source: 'perplexity',
+          message: 'No matching events found in our database. Here are upcoming events from web search.',
+          pagination: {
+            currentPage: pageNum,
+            totalPages: 1,
+            totalResults: perplexityResults.length,
+            resultsPerPage: perplexityResults.length,
+            hasNextPage: false,
+            hasPreviousPage: false
+          }
+        });
+      }
+      
+      // If Perplexity also fails or returns no upcoming events
+      return res.status(404).json({
+        error: 'No upcoming events found',
+        statusCode: 404,
+        message: 'No upcoming events match your search. Try different keywords or check back later for new events.'
+      });
+    }
+
+    // Apply improved filtering logic
+    const bestSimilarity = result.rows[0].similarity;
+    const hasExactKeywordMatch = result.rows.some(row => row.has_exact_keywords);
+    let finalResults = result.rows; // Use all results from pagination
+
+    const isVeryExactSemantic = bestSimilarity < 0.05;
+
+    // Filter logic remains but applies to current page only
+    if (hasExactKeywordMatch) {
+      console.log(`Exact keyword match found. Prioritizing keyword matches.`);
+      const keywordMatches = result.rows.filter(row => row.has_exact_keywords);
+      finalResults = keywordMatches;
+      
+      if (finalResults.length < limitNum && isVeryExactSemantic) {
+        const additionalResults = result.rows
+          .filter(row => !row.has_exact_keywords && row.similarity < 0.08)
+          .slice(0, limitNum - finalResults.length);
+        finalResults = [...finalResults, ...additionalResults];
+      }
+    } else if (isVeryExactSemantic) {
+      console.log(`Exact semantic match detected (similarity: ${bestSimilarity}). Showing only exact matches.`);
+      finalResults = result.rows.filter(row => row.similarity < 0.08);
+    } else if (pageNum === 1) {
+      // Only use Perplexity fallback on first page with weak matches
+      console.log(`No exact keyword matches found and semantic similarity not strong enough. Trying Perplexity...`);
+      
+      const locationInfo = latitude && longitude ? { 
+        suburb: req.query.suburb, 
+        state: req.query.state 
+      } : null;
+      
+      const perplexityResults = await searchWithPerplexity(query, category, locationInfo, start_date);
+      
+      if (perplexityResults && perplexityResults.length > 0) {
+        console.log(`Perplexity returned ${perplexityResults.length} upcoming results`);
+        return res.json({
+          data: perplexityResults,
+          source: 'perplexity',
+          message: 'No matching events found in our database. Here are upcoming events from web search.',
+          pagination: {
+            currentPage: pageNum,
+            totalPages: 1,
+            totalResults: perplexityResults.length,
+            resultsPerPage: perplexityResults.length,
+            hasNextPage: false,
+            hasPreviousPage: false
+          }
+        });
+      }
+      
+      return res.status(404).json({
+        error: 'No upcoming events found',
+        statusCode: 404,
+        message: 'No upcoming events match your search. Try different keywords or check back later for new events.'
+      });
+    }
+
+    // Only return results if we have meaningful matches
+    if (finalResults.length === 0 && pageNum === 1) {
+      // 🌐 PERPLEXITY FALLBACK: Empty final results
+      console.log('Final results empty after filtering. Trying Perplexity...');
+      
+      const locationInfo = latitude && longitude ? { 
+        suburb: req.query.suburb, 
+        state: req.query.state 
+      } : null;
+      
+      const perplexityResults = await searchWithPerplexity(query, category, locationInfo, start_date);
+      
+      if (perplexityResults && perplexityResults.length > 0) {
+        console.log(`Perplexity returned ${perplexityResults.length} upcoming results`);
+        return res.json({
+          data: perplexityResults,
+          source: 'perplexity',
+          message: 'No matching events found in our database. Here are upcoming events from web search.',
+          pagination: {
+            currentPage: pageNum,
+            totalPages: 1,
+            totalResults: perplexityResults.length,
+            resultsPerPage: perplexityResults.length,
+            hasNextPage: false,
+            hasPreviousPage: false
+          }
+        });
+      }
+      
+      return res.status(404).json({
+        error: 'No upcoming events found',
+        statusCode: 404,
+        message: 'No upcoming events match your search. Try different keywords or check back later for new events.'
+      });
+    }
+
+    console.log(`Found ${totalCount} total results, returning page ${pageNum} with ${finalResults.length} results`);
+    
+    res.json({
+      data: finalResults,
+      pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total : totalPages,
+          totalResults: totalCount,
+          hasNextPage: pageNum < totalPages,
+          hasPreviousPage: pageNum > 1
+      }
+    });
+
+        
+
   } catch (err) {
-    console.error("❌ Semantic search error:", err.message);
-    res.status(500).json({ status: false, error: "Internal Server Error" });
+    console.error('❌ Semantic search error:', err.message); 
+    res.status(500).json({ error: 'Internal Server Error' });
   }
 };

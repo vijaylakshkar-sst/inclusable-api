@@ -9,7 +9,7 @@ exports.handleInAppWebhook = async (req, res) => {
 
   // Basic payload validation
   if (!payload || !payload.event_type || !payload.user_id || !payload.plan_id) {
-    return res.status(400).json({ success: false, message: 'Invalid webhook payload.' });
+    return res.status(400).json({ status: false, message: 'Invalid webhook payload.' });
   }
 
   const {
@@ -161,11 +161,11 @@ exports.handleInAppWebhook = async (req, res) => {
     client.release();
 
     console.log(`✅ Webhook processed: ${event_type} for user ${user_id}`);
-    return res.status(200).json({ success: true, message: 'Webhook processed successfully.' });
+    return res.status(200).json({ status: true, message: 'Webhook processed successfully.' });
   } catch (err) {
     await client.query('ROLLBACK');
     client.release();
     console.error('❌ Webhook error:', err);
-    return res.status(500).json({ success: false, message: err.message });
+    return res.status(500).json({ status: false, message: err.message });
   }
 };
