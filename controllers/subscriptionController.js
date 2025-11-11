@@ -1,5 +1,7 @@
 const pool = require('../dbconfig');
 
+const BASE_IMAGE_URL = process.env.BASE_IMAGE_URL;
+
 exports.getSubscriptionPlans = async (req, res) => {
   try {
     //const userId = req.user.userId;
@@ -30,6 +32,7 @@ exports.getSubscriptionPlans = async (req, res) => {
         duration,
         trial_days,
         is_active,
+        icon,
         created_at,
         updated_at
       FROM subscription_plans
@@ -51,12 +54,18 @@ exports.getSubscriptionPlans = async (req, res) => {
     const { rows } = await client.query(query, [normalizedRole]);
     client.release();
 
+     // Attach full icon URL if available
+    const plansWithIcon = rows.map(plan => ({
+      ...plan,
+      icon_url: plan.icon ? `${BASE_IMAGE_URL}/${plan.icon}` : null
+    }));
+
     return res.status(200).json({
       status: true,
       data: {
         role: normalizedRole,
-        count: rows.length,
-        plans: rows
+        count: plansWithIcon.length,
+        plans: plansWithIcon
       },
       message: 'Subscription plans fetched successfully',
     });
@@ -193,7 +202,8 @@ exports.getCurrentSubscription = async (req, res) => {
         sp.duration,
         sp.trial_days,
         sp.audience_role,
-        sp.is_active
+        sp.is_active,
+        sp.icon
       FROM user_subscriptions us
       JOIN subscription_plans sp ON us.plan_id = sp.id
       WHERE us.user_id = $1
@@ -205,28 +215,8 @@ exports.getCurrentSubscription = async (req, res) => {
     // 🧩 If user has no subscription → default to free
     if (result.rows.length === 0) {
       return res.status(200).json({
-        status: true,
-        message: 'No active subscription found. Defaulting to free plan.',
-        data: {
-          plan: {
-            id: null,
-            name: 'Starter Plan',
-            type: 'free',
-            price: 0.0,
-            currency: 'USD',
-            description: 'Browse and view all listed events with limited access.',
-            features: [
-              'Browse and view all listed events',
-              'Select up to 2 event categories',
-              'Booking disabled (Upgrade prompt shown)',
-              'Basic AI-powered search with limited queries'
-            ],
-            duration: null,
-            trial_days: 0,
-            status: 'active',
-            role: 'NDIS Member'
-          }
-        }
+        status: false,
+        message: 'No active subscription found.',        
       });
     }
 
@@ -235,7 +225,9 @@ exports.getCurrentSubscription = async (req, res) => {
     // ⏰ Check if plan is expired
     const now = new Date();
     const isExpired = plan.expiry_date && new Date(plan.expiry_date) < now;
-    const currentStatus = isExpired ? 'expired' : plan.subscription_status;
+    const currentStatus = isExpired ? 'expired' : plan.subscription_status; 
+
+    const fullIconUrl = plan.icon ? `${BASE_IMAGE_URL}/${plan.icon}` : null;
 
     // 🧾 Response structure
     return res.status(200).json({
@@ -256,7 +248,8 @@ exports.getCurrentSubscription = async (req, res) => {
           trial_days: plan.trial_days,
           expires_on: plan.expiry_date,
           status: currentStatus,
-          is_active: plan.is_active
+          is_active: plan.is_active,
+          icon_url: fullIconUrl
         }
       }
     });

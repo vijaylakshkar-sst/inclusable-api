@@ -16,6 +16,9 @@ CREATE TABLE IF NOT EXISTS cab_bookings (
     scheduled_time TIMESTAMP,
     distance_km FLOAT,
     estimated_fare FLOAT,
+    booking_mode VARCHAR(20) NOT NULL,
+    booking_otp VARCHAR(20) DEFAULT NULL,
+    booking_verified BOOLEAN DEFAULT FALSE;
     status VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending', 'scheduled', 'accepted', 'in_progress', 'completed', 'cancelled')),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

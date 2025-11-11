@@ -1,5 +1,7 @@
 const pool = require('../dbconfig');
-const { sendNotification } = require('../hooks/notification');
+const { sendNotification, sendNotificationToDriver } = require('../hooks/notification');
+
+const BASE_IMAGE_URL = process.env.BASE_IMAGE_URL;
 
 exports.findAvailableRides = async (req, res) => {
   const { lat, lng, radius_km = 10 } = req.query;
@@ -66,10 +68,12 @@ exports.findAvailableRides = async (req, res) => {
 
 
 exports.bookCab = async (req, res) => {
+
+  const user_id = req.user?.userId;
   const {
-    user_id,
     cab_type_id,
     booking_type,
+    booking_mode,
     pickup_address,
     pickup_lat,
     pickup_lng,
@@ -80,7 +84,7 @@ exports.bookCab = async (req, res) => {
   } = req.body;
 
   if (
-    !user_id || !cab_type_id || !booking_type ||
+    !cab_type_id || !booking_type ||
     !pickup_address || !pickup_lat || !pickup_lng ||
     !drop_address || !drop_lat || !drop_lng
   ) {
@@ -93,6 +97,10 @@ exports.bookCab = async (req, res) => {
 
   if (booking_type === 'later' && !scheduled_time) {
     return res.status(400).json({ status: false, message: 'Scheduled time is required for later bookings' });
+  }
+
+  if (!['cash', 'credit card', 'other'].includes(booking_mode)) {
+    return res.status(400).json({ status: false, message: 'Invalid booking_mode. Use cash, credit card , other.' });
   }
 
   try {
@@ -127,7 +135,7 @@ exports.bookCab = async (req, res) => {
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     const distance_km = parseFloat((R * c).toFixed(2));
 
-    const estimated_fare = parseFloat((cabType.base_fare + distance_km * cabType.fare_per_km).toFixed(2));
+    const estimated_fare = parseFloat((cabType.base_fare || 0 + distance_km * cabType.fare_per_km).toFixed(2));
 
     let driverId = null;
 
@@ -163,15 +171,17 @@ exports.bookCab = async (req, res) => {
       await client.query('UPDATE drivers SET is_available = false WHERE id = $1', [driverId]);
     }
 
+    const booking_otp = Math.floor(1000 + Math.random() * 9000);
+
     const result = await client.query(
       `
       INSERT INTO cab_bookings (
         user_id, driver_id, cab_type_id, booking_type,
         pickup_address, pickup_lat, pickup_lng,
         drop_address, drop_lat, drop_lng,
-        scheduled_time, distance_km, estimated_fare, status
+        scheduled_time, distance_km, estimated_fare, status,booking_mode,booking_otp
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
       RETURNING *;
       `,
       [
@@ -189,35 +199,47 @@ exports.bookCab = async (req, res) => {
         distance_km,
         estimated_fare,
         booking_type === 'instant' ? 'pending' : 'scheduled',
+        booking_mode,
+        booking_otp
       ]
     );
 
-    const booking = result.rows[0];
+    const booking = result.rows[0];    
 
-    await sendNotification({
-        user_id,
+     const driverResult = await client.query(
+          'SELECT id,user_id FROM drivers WHERE id = $1 LIMIT 1',
+          [driverId]
+      );
+
+      if (driverResult.rowCount === 0) {
+          return res.status(404).json({
+              status: false,
+              message: 'Driver not found for this user'
+          });
+      }
+
+    const driver_user_id = driverResult.rows[0].user_id;
+
+    // Send notification to driver if assigned
+    if (driverId) {
+      await sendNotificationToDriver({
+        driverUserId: driver_user_id,
+        title: 'New Ride Assigned',
+        message: 'You have been assigned a new booking. Tap to view details.',
+        type: 'Booking',
         booking_id: booking.id,
-        title: 'Cab Booked',
-        message: `Your ${cabType.name} cab has been booked.`,
-        type: 'booking',
-        target: 'user'
-        });
-
-        // Send notification to driver if assigned
-        if (driverId) {
-            await sendNotification({
-                driver_id: driverId,
-                booking_id: booking.id,
-                title: 'New Ride Assigned',
-                message: `You have a new ride for booking #${booking.id}.`,
-                type: 'booking',
-                target: 'driver'
-            });
+        image_url: `${BASE_IMAGE_URL}/icons/check-circle.png`,
+        bg_color: '#1FB23F',
+        data: {
+          screen: 'BookingDetails',
+          sound: 'default'
         }
+      });
+    }
 
     res.status(201).json({
       status: true,
-      message: 'Cab booking successful',
+      message: `Your ${cabType.name} cab has been booked.`,
       data: result.rows[0],
     });
 
@@ -256,25 +278,37 @@ exports.cancelBooking = async (req, res) => {
       await client.query('UPDATE drivers SET is_available = true WHERE id = $1', [booking.driver_id]);
     }
 
-    // Send notifications
-    await sendNotification({
-      user_id: booking.user_id,
-      booking_id: booking.id,
-      title: 'Booking Cancelled',
-      message: 'Your cab booking has been cancelled.',
-      type: 'booking',
-      target: 'user'
-    });
+    const driverId = booking.driver_id;    
 
-    if (booking.driver_id) {
-      await sendNotification({
-        driver_id: booking.driver_id,
-        booking_id: booking.id,
+    const driverResult = await client.query(
+          'SELECT id,user_id FROM drivers WHERE id = $1 LIMIT 1',
+          [driverId]
+      );
+
+      if (driverResult.rowCount === 0) {
+          return res.status(404).json({
+              status: false,
+              message: 'Driver not found for this user'
+          });
+      }
+
+    const driver_user_id = driverResult.rows[0].user_id;
+
+ 
+    if (driverId) {      
+      await sendNotificationToDriver({
+        driverUserId: driver_user_id,
         title: 'Booking Cancelled',
         message: `Booking #${booking.id} has been cancelled.`,
-        type: 'booking',
-        target: 'driver'
-      });
+        type: 'Booking',
+        booking_id: booking.id,
+        image_url: `${BASE_IMAGE_URL}/icons/check-xmark.png`,
+        bg_color: '#DF1D17',
+        data: {
+          screen: 'BookingDetails',
+          sound: 'default',          
+        }
+      });   
     }
 
     res.status(200).json({ status: true, message: 'Booking cancelled successfully' });

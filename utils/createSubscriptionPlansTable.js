@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS subscription_plans (
     duration INTERVAL DEFAULT NULL,                    -- '1 month', '1 year'
     trial_days INT DEFAULT 0,
     is_active BOOLEAN DEFAULT TRUE,
+    icon VARCHAR(255) DEFAULT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

@@ -1501,3 +1501,81 @@ exports.getNotifications = async (req, res) => {
     });
   }
 };
+
+const generateOTP = () => Math.floor(1000 + Math.random() * 9000);
+
+exports.registerCabOwner = async (req, res) => {
+  try {
+    const { full_name, email, password, phone_number, date_of_birth, address } = req.body;
+    const profile_image = null;
+
+    if (req.files) {
+      if (req.files["profile_image"]?.[0]) {
+        profile_image = req.files["profile_image"][0].filename;
+      }     
+    }
+
+    // 🧾 Validation
+    if (!full_name || !email || !password || !phone_number || !date_of_birth || !address) {
+      return res.status(400).json({
+        status: false,
+        message: 'All fields are required including date_of_birth and address.',
+      });
+    }
+
+    const existingUser = await pool.query(
+      'SELECT id FROM users WHERE email = $1 AND deleted_at IS NULL',
+      [email]
+    );
+    if (existingUser.rows.length > 0) {
+      return res.status(400).json({ status: false, message: 'Email already registered.' });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const otp = generateOTP();
+
+    const insertQuery = `
+      INSERT INTO users (
+        full_name, email, password, phone_number, role,
+        date_of_birth, address, profile_image, verification_code, is_verified
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, false)
+    `;
+
+    await pool.query(insertQuery, [
+      full_name,
+      email,
+      hashedPassword,
+      phone_number,
+      'Cab Owner',
+      date_of_birth,
+      address,
+      profile_image,
+      otp,
+    ]);
+
+     // Load and replace placeholders in email template
+    let emailTemplate = fs.readFileSync(templatePath, 'utf-8');
+    emailTemplate = emailTemplate
+      .replace('{{full_name}}', full_name)
+      .replace('{{otp}}', otp);
+
+    // ✅ Send Email
+    const mailOptions = {
+      from: `"Inclusable" <${EMAIL_FROM}>`,
+      to: email,
+      subject: 'Verify Your Email - OTP Code',
+      html: emailTemplate,
+    };
+
+    await transporter.sendMail(mailOptions);
+
+    res.status(200).json({
+      status: true,
+      message: 'Cab Owner registered successfully. OTP has been sent to your email.',
+      data: { email, otp }, // remove otp in production
+    });
+  } catch (error) {
+    console.error('Cab Owner Register Error:', error);
+    res.status(500).json({ status: false, message: 'Internal server error.' });
+  }
+};
