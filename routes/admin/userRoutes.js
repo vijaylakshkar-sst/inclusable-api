@@ -10,5 +10,10 @@ router.get('/events-by-business/:id', auth, userController.getEventsByBusiness);
 router.get('/user-bookings/:id', auth, userController.getUserEventBookings);
 router.delete('/event/:id', auth, userController.deleteEvent);
 
+// List all drivers
+router.get('/cab-owners', auth, userController.getAllDrivers);
+router.delete('/cab-owners/:id', auth, userController.deleteDriver);
+router.get('/cab-owner/:id', auth, userController.getCabOwnerDetails);
+
 
 module.exports = router;

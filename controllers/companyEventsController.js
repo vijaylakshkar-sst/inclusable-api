@@ -41,8 +41,8 @@ exports.createCompanyEvent = async (req, res) => {
 const subscription = await getCurrentAccess(req, res, true);
   // If the event is "paid", ensure plan allows paid ticketing
   if (price_type === 'paid' && !subscription.plan.features.canAccessPaidTicket) {
-    return res.status(403).json({
-      success: false,
+    return res.status(400).json({
+      status: false,
       message: `Your current plan (“${subscription.plan.name}”) does not allow paid ticketing. Please upgrade to enable this feature.`,
       current_plan: subscription.plan.name,
       upgrade_suggestion: 'growth'

@@ -9,7 +9,7 @@ exports.checkCompanyEventLimit = async (req, res, next) => {
     // 🧩 Verify company role
     if (subscription.role !== 'Company') {
       return res.status(403).json({
-        success: false,
+        status: false,
         message: 'Only company accounts can post events.'
       });
     }
@@ -40,7 +40,7 @@ exports.checkCompanyEventLimit = async (req, res, next) => {
     // 🚫 Exceeded monthly limit
     if (postedCount >= maxAllowed) {
       return res.status(403).json({
-        success: false,
+        status: false,
         message: `You’ve reached your monthly limit of ${maxAllowed} event${maxAllowed > 1 ? 's' : ''}.`,
         current_plan: plan.name,
         upgrade_suggestion:
@@ -52,7 +52,7 @@ exports.checkCompanyEventLimit = async (req, res, next) => {
   } catch (err) {
     console.error('❌ Error checking company event limit:', err.message);
     res.status(500).json({
-      success: false,
+      status: false,
       message: 'Error verifying event posting limit.',
       error: err.message
     });

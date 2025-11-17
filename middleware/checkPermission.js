@@ -33,7 +33,7 @@ exports.checkFeatureAccess = (feature) => async (req, res, next) => {
       typeof subscription.plan.features[feature] === 'undefined'
     ) {
       return res.status(403).json({
-        success: false,
+        status: false,
         message: 'Unable to verify your subscription plan. Please try again later.',
       });
     }
@@ -52,7 +52,7 @@ exports.checkFeatureAccess = (feature) => async (req, res, next) => {
         `This feature is not available in your current plan. Please upgrade to access it.`;
 
       return res.status(403).json({
-        success: false,
+        status: false,
         message,
         current_plan: plan.type,
         current_plan_name: plan.name,
@@ -67,7 +67,7 @@ exports.checkFeatureAccess = (feature) => async (req, res, next) => {
   } catch (err) {
     console.error('❌ Error verifying feature access:', err.message);
     return res.status(500).json({
-      success: false,
+      status: false,
       message: 'Error verifying subscription access.',
       error: err.message,
     });

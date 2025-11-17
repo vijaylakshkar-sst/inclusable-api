@@ -21,6 +21,8 @@ const dashboardRoutes = require('./routes/admin/dashboardRoutes');
 const userAdminRoutes = require('./routes/admin/userRoutes');
 const cabTypeRoutes = require('./routes/admin/cabTypeRoutes');
 const supportTicketRoutes = require('./routes/admin/supportTicketRoutes');
+const vehicleMakesRoutes = require('./routes/admin/vehicleMakesRoutes');
+const vehicleModelsRoutes = require('./routes/admin/vehicleModelsRoutes');
 
 
 
@@ -61,6 +63,9 @@ app.use('/api/v1/admin/dashboard', dashboardRoutes);
 app.use('/api/v1/admin/users', userAdminRoutes);
 app.use('/api/v1/admin/cab-types', cabTypeRoutes);
 app.use('/api/v1/admin/support-tickets', supportTicketRoutes);
+app.use('/api/v1/admin/vehicle-makes', vehicleMakesRoutes);
+app.use('/api/v1/admin/vehicle-models', vehicleModelsRoutes);
+
 
 
 //================Driver API==============================
