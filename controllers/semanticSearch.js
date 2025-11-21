@@ -1,4 +1,5 @@
 const axios = require('axios');
+const crypto = require('crypto');
 require('dotenv').config();
 const pool = require('../dbconfig');
 
@@ -18,6 +19,135 @@ function toPgVectorString(arr) {
   }
 
   return `[${arr.join(',')}]`;
+}
+
+function sanitizeNumber(value) {
+  if (value === null || value === undefined) return null;
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+function normalizeEventDate(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  return isNaN(date.getTime()) ? null : date;
+}
+
+function buildEmbeddingText(event) {
+  const segments = [
+    event.title,
+    event.description,
+    Array.isArray(event.category) ? event.category.join(' ') : event.category,
+    event.suburb,
+    event.state,
+    event.website
+  ].filter(Boolean);
+
+  if (!segments.length) {
+    return null;
+  }
+
+  const combined = segments.join(' | ');
+  return combined.length > 8000 ? combined.slice(0, 8000) : combined;
+}
+
+function generateDeterministicEventId(event, fallbackIndex = 0) {
+  const parts = [
+    event.id,
+    event.title,
+    event.start_date,
+    event.suburb,
+    event.state,
+    event.website
+  ].filter(Boolean).join('|').toLowerCase();
+
+  const baseString = parts || `perplexity-${fallbackIndex}-${Date.now()}`;
+  const hash = crypto.createHash('sha1').update(baseString).digest('hex');
+  return `perplexity-${hash.slice(0, 32)}`;
+}
+
+async function persistPerplexityEvents(events) {
+  if (!Array.isArray(events) || events.length === 0) {
+    return;
+  }
+
+  const client = await pool.connect();
+
+  try {
+    for (const event of events) {
+      const eventId = event.id || generateDeterministicEventId(event);
+      const embeddingText = buildEmbeddingText(event);
+
+      let embeddingVector = null;
+      if (embeddingText) {
+        try {
+          embeddingVector = await getEmbedding(embeddingText);
+        } catch (err) {
+          console.error(`⚠️ Failed to create embedding for ${eventId}:`, err.message);
+        }
+      }
+
+      const insertQuery = `
+        INSERT INTO events (
+          id,
+          title,
+          description,
+          start_date,
+          end_date,
+          suburb,
+          state,
+          postcode,
+          latitude,
+          longitude,
+          category,
+          website,
+          image_url,
+          host,
+          embedding
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+        ON CONFLICT (id) DO UPDATE SET
+          title = COALESCE(EXCLUDED.title, events.title),
+          description = COALESCE(EXCLUDED.description, events.description),
+          start_date = COALESCE(EXCLUDED.start_date, events.start_date),
+          end_date = COALESCE(EXCLUDED.end_date, events.end_date),
+          suburb = COALESCE(EXCLUDED.suburb, events.suburb),
+          state = COALESCE(EXCLUDED.state, events.state),
+          postcode = COALESCE(EXCLUDED.postcode, events.postcode),
+          latitude = COALESCE(EXCLUDED.latitude, events.latitude),
+          longitude = COALESCE(EXCLUDED.longitude, events.longitude),
+          category = COALESCE(EXCLUDED.category, events.category),
+          website = COALESCE(EXCLUDED.website, events.website),
+          image_url = COALESCE(EXCLUDED.image_url, events.image_url),
+          host = COALESCE(EXCLUDED.host, events.host),
+          embedding = COALESCE(EXCLUDED.embedding, events.embedding)
+      `;
+
+      const values = [
+        eventId,
+        event.title || null,
+        event.description || null,
+        normalizeEventDate(event.start_date),
+        normalizeEventDate(event.end_date),
+        event.suburb || null,
+        event.state || null,
+        event.postcode || null,
+        sanitizeNumber(event.latitude),
+        sanitizeNumber(event.longitude),
+        Array.isArray(event.category) ? event.category : (event.category ? [event.category] : null),
+        event.website || null,
+        event.image_url || null,
+        event.host || 'perplexity',
+        embeddingVector ? toPgVectorString(embeddingVector) : null
+      ];
+
+      await client.query(insertQuery, values);
+    }
+  } catch (err) {
+    console.error('❌ Failed to persist Perplexity events:', err.message);
+  } finally {
+    client.release();
+  }
 }
 
 
@@ -358,33 +488,46 @@ function parsePerplexityResponse(content, originalQuery, startDate) {
       }
     }
 
+    // if (!Array.isArray(events) || events.length === 0) {
+    //   console.warn("⚠️ No valid structured events found, using text fallback.");
+    //   events = [
+    //     {
+    //       id: "perplexity-1",
+    //       title: `Events related to "${originalQuery}"`,
+    //       description: content.slice(0, 400).replace(/```json|```|\[|\]/g, "").trim(),
+    //       start_date: null,
+    //       end_date: null,
+    //       suburb: null,
+    //       state: null,
+    //       postcode: null,
+    //       latitude: null,
+    //       longitude: null,
+    //       category: ["Community Event"],
+    //       website: null,
+    //       source: "perplexity",
+    //       similarity: 0,
+    //       distance_km: null
+    //     }
+    //   ];
+    // }
+
+
+
+
     if (!Array.isArray(events) || events.length === 0) {
-      console.warn("⚠️ No valid structured events found, using text fallback.");
-      events = [
-        {
-          id: "perplexity-1",
-          title: `Events related to "${originalQuery}"`,
-          description: content.slice(0, 400).replace(/```json|```|\[|\]/g, "").trim(),
-          start_date: null,
-          end_date: null,
-          suburb: null,
-          state: null,
-          postcode: null,
-          latitude: null,
-          longitude: null,
-          category: ["Community Event"],
-          website: null,
-          source: "perplexity",
-          similarity: 0,
-          distance_km: null
-        }
-      ];
+      console.warn("⚠️ No valid structured events found, returning NOT FOUND response.");
+
+      // Return the same error format your main API uses
+      return {
+        error: "No upcoming events found",
+        statusCode: 404,
+        message: "No upcoming events match your search. Try different keywords or check back later for new events."
+      };
     }
 
     // ==============================
     // LOCATION PARSING
     // ==============================
-   
 
     const parseLocation = (loc) => {
       if (!loc) return { suburb: null, state: null, postcode: null, latitude: null, longitude: null };
@@ -439,20 +582,26 @@ function parsePerplexityResponse(content, originalQuery, startDate) {
 
 
 
-            // Detect categories first
+      // Detect categories first
       const categories = detectCategories([
         event.category,
         event.title,
         event.description
       ]);
 
-    // ALWAYS use our reliable image library
+      // ALWAYS use our reliable image library
       // Ignore any image_url from Perplexity as they're often fake
       const imageUrl = getRandomImageForCategory(categories[0]);
 
 
+      const deterministicId = event.id || generateDeterministicEventId({
+        ...event,
+        suburb: loc.suburb,
+        state: loc.state
+      }, index);
+
       return {
-        id: event.id || `perplexity-${index + 1}`,
+        id: deterministicId,
         title: event.title?.trim() || "Untitled Event",
         description: event.description?.trim() || "",
         start_date: event.start_date || event.date || null,
@@ -473,7 +622,7 @@ function parsePerplexityResponse(content, originalQuery, startDate) {
 
     // ==============================
     // FILTER UPCOMING EVENTS
-  
+
 
     const upcoming = formattedEvents.filter(ev => {
       if (!ev.start_date) return true;
@@ -520,7 +669,7 @@ exports.semanticSearch = async (req, res) => {
 
   const offset = (pageNum - 1) * limitNum;
 
-    try {
+  try {
     // ====================================
     // PARALLEL EXECUTION STARTS HERE
     // ====================================
@@ -538,7 +687,7 @@ exports.semanticSearch = async (req, res) => {
         suburb: req.query.suburb,
         state: req.query.state
       } : null;
-      
+
       perplexityPromise = searchWithTimeout(query, category, locationInfo, start_date);
 
       // Wait for embedding to complete (usually fast)
@@ -549,7 +698,7 @@ exports.semanticSearch = async (req, res) => {
       }
     }
 
-    
+
     // Get user preferences
     let hasPreferences = false;
     let preferredTypes = [];
@@ -1109,16 +1258,23 @@ exports.semanticSearch = async (req, res) => {
     const totalPages = Math.ceil(totalCount / limitNum);
 
 
-     if (result.rows.length === 0 || (embedding && result.rows[0]?.similarity > 0.15)) {
+    if (result.rows.length === 0 || (embedding && result.rows[0]?.similarity > 0.15)) {
       // Database results are poor or empty
-      
+
       if (perplexityPromise) {
         // We already started Perplexity search - just wait for it
-        console.log('⏳ Waiting for Perplexity results (already in progress)...');
+        // console.log('⏳ Waiting for Perplexity results (already in progress)...');
         const perplexityResults = await perplexityPromise;
+
+        // If parsePerplexityResponse returned NOT FOUND error
+        if (perplexityResults?.statusCode === 404) {
+          return res.status(404).json(perplexityResults);
+        }
+
 
         if (perplexityResults && perplexityResults.length > 0) {
           console.log(`✅ Perplexity returned ${perplexityResults.length} results`);
+          await persistPerplexityEvents(perplexityResults);
           return res.json({
             status: true,
             data: perplexityResults,
@@ -1134,6 +1290,7 @@ exports.semanticSearch = async (req, res) => {
             }
           });
         }
+
       }
 
       // If no query or Perplexity also fails
@@ -1147,7 +1304,7 @@ exports.semanticSearch = async (req, res) => {
     // Apply improved filtering logic (only if embedding exists)
     let finalResults = result.rows;
 
- if (embedding) {
+    if (embedding) {
       const bestSimilarity = result.rows[0].similarity;
       const hasExactKeywordMatch = result.rows.some(row => row.has_exact_keywords);
 

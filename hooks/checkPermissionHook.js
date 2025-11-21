@@ -5,7 +5,7 @@ const planAccess = {
   // 🧍 NDIS Member Plans
   free: {
     canBrowseEvents: true,
-    canBookTickets: false,
+    canBookTickets: true,
     maxCategories: 2,
     aiSearch: 'Basic AI-Powered (limited)',
     priorityUpdates: false,

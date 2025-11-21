@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS user_subscriptions (
     next_renewal_date TIMESTAMP,                           -- for auto-renew
     auto_renew BOOLEAN DEFAULT FALSE,
     last_payment_id INTEGER REFERENCES payments(id),
+    originalTransactionId VARCHAR(255),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
