@@ -1579,3 +1579,46 @@ exports.registerCabOwner = async (req, res) => {
     res.status(500).json({ status: false, message: 'Internal server error.' });
   }
 };
+
+exports.getStripeKeys = async (req, res) => {
+  try {
+    const { env } = req.params;
+
+    if (!env || !["test", "production"].includes(env)) {
+      return res.status(400).json({
+        status: false,
+        message: "Invalid environment. Use 'test' or 'production'."
+      });
+    }
+
+    const query = `
+      SELECT id, environment, publishable_key, secret_key, webhook_secret,
+             created_at, updated_at
+      FROM stripe_keys
+      WHERE environment = $1
+      LIMIT 1;
+    `;
+
+    const result = await pool.query(query, [env]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        status: false,
+        message: "No Stripe keys found for environment: " + env
+      });
+    }
+
+    return res.json({
+      status: true,
+      data: result.rows[0]
+    });
+
+  } catch (error) {
+    console.error("❌ Error fetching Stripe keys:", error.message);
+
+    return res.status(500).json({
+      status: false,
+      message: "Internal server error"
+    });
+  }
+};

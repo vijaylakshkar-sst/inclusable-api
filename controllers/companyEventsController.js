@@ -1040,7 +1040,32 @@ exports.createEventBooking = async (req, res) => {
     total_amount = 0.00,
     attendee_info,
     platform_fee = 0.00,
+    stripe_key,
   } = req.body;
+
+  if (!stripe_key || !["test", "production"].includes(stripe_key)) {
+      return res.status(400).json({
+        status: false,
+        message: "Invalid environment. Use 'test' or 'production'."
+      });
+    }
+
+    const StripeQuery = `
+      SELECT id, environment, publishable_key
+      FROM stripe_keys
+      WHERE environment = $1
+      LIMIT 1;
+    `;
+
+    const resultStripeKey = await pool.query(StripeQuery, [stripe_key]);
+
+    if (resultStripeKey.rows.length === 0) {
+      return res.status(404).json({
+        status: false,
+        message: "No Stripe keys found for environment: " + stripe_key
+      });
+    }
+
 
   const eventCheck = await pool.query(
     'SELECT id, price_type, total_available_seats FROM company_events WHERE id = $1 AND user_id = $2',
@@ -1182,7 +1207,7 @@ exports.createEventBooking = async (req, res) => {
           booking_id: dynamicData.booking_id
         });
       }
-    }
+    }    
     
 
     await client.query('COMMIT');
@@ -1194,7 +1219,8 @@ exports.createEventBooking = async (req, res) => {
         : 'Booking successfully created.',
       data: {
         clientSecret: paymentIntent ? paymentIntent.client_secret : null,
-        bookingId: booking_id
+        bookingId: booking_id,
+        stripeKey: resultStripeKey.rows[0]
       }
     });
 

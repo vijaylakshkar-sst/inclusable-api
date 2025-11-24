@@ -28,6 +28,8 @@ router.put('/company-profile/update', auth, uploadFiles, userController.updatePr
 
 router.put('/user-profile/update', auth, uploadFiles, userController.updateProfile );
 
+router.get("/stripe/keys/:env", auth, userController.getStripeKeys);
+
 router.post("/stripe/create-bank-link", userController.createBankLink);
 
 router.post('/stripe/onboarding/connect', auth, StripeConnectController.createAccountLink);
