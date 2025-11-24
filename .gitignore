@@ -37,7 +37,7 @@ inclusable-firebase.json
 
 # Compiled binary addons (https://nodejs.org/api/addons.html)
 build/Release
-
+utils/createStripeKeysTable.js
 uploads/
 
 # Dependency directories
