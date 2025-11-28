@@ -1,4 +1,5 @@
 const pool = require('../dbconfig');
+const { getCurrentAccessAPP } = require('../hooks/checkPermissionHook');
 
 const BASE_IMAGE_URL = process.env.BASE_IMAGE_URL;
 
@@ -59,7 +60,8 @@ exports.getSubscriptionPlans = async (req, res) => {
       ...plan,
       icon_url: plan.icon ? `${BASE_IMAGE_URL}/${plan.icon}` : null
     }));
-
+ 
+ 
     return res.status(200).json({
       status: true,
       data: {
@@ -229,6 +231,8 @@ exports.getCurrentSubscription = async (req, res) => {
 
     const fullIconUrl = plan.icon ? `${BASE_IMAGE_URL}/${plan.icon}` : null;
 
+    const subscription = await getCurrentAccessAPP(req, res, true);    
+
     // 🧾 Response structure
     return res.status(200).json({
       status: true,
@@ -250,7 +254,8 @@ exports.getCurrentSubscription = async (req, res) => {
           status: currentStatus,
           is_active: plan.is_active,
           icon_url: fullIconUrl
-        }
+        },
+        access:subscription.plan.features
       }
     });
   } catch (err) {
