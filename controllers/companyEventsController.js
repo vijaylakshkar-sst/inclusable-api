@@ -6,68 +6,131 @@ const BASE_IMAGE_URL = process.env.BASE_IMAGE_URL;
 const { sendNotification,sendNotificationToBusiness } = require("../hooks/notification");
 // Fetch user’s plan dynamically
 const { getCurrentAccess } = require('../hooks/checkPermissionHook');
+const fs = require('fs');
+const path = require('path');
 
+// Helper: delete uploaded files when limit exceeded
+const deleteUploadedFiles = (files) => {
+  if (!files) return;
+
+  Object.keys(files).forEach(field => {
+    files[field].forEach(file => {
+      const filePath = path.join(__dirname, '..', 'uploads', 'events', file.filename);
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    });
+  });
+};
 
 exports.createCompanyEvent = async (req, res) => {
-
-  const validation = eventCreateSchema.validate(req.body);
-  if (validation.error) {
-    return res.status(400).json({ error: validation.error.details[0].message });
-  }
-
-  const {
-    event_name,
-    event_types,
-    disability_types,
-    accessibility_types,
-    event_description,
-    start_date,
-    end_date,
-    start_time,
-    end_time,
-    price_type,
-    price,
-    total_available_seats,
-    event_address,
-    how_to_reach_destination,
-    latitude,
-    longitude
-  } = req.body;
-
-  const user_id = req.user?.userId; // Auth middleware must set req.user
-  if (!user_id) {
-    return res.status(401).json({ status: false, error: 'Unauthorized' });
-  }
-const subscription = await getCurrentAccess(req, res, true);
-  // If the event is "paid", ensure plan allows paid ticketing
-  if (price_type === 'paid' && !subscription.plan.features.canAccessPaidTicket) {
-    return res.status(400).json({
-      status: false,
-      message: `Your current plan (“${subscription.plan.name}”) does not allow paid ticketing. Please upgrade to enable this feature.`,
-      current_plan: subscription.plan.name,
-      upgrade_suggestion: 'growth'
-    });
-  }
-
-  const thumbnail = req.files['event_thumbnail']?.[0]?.filename || null;
-  const eventImages = req.files['event_images']?.map(file => file.filename) || [];
-
   try {
+    const validation = eventCreateSchema.validate(req.body);
+    if (validation.error) {
+      deleteUploadedFiles(req.files);
+      return res.status(400).json({ error: validation.error.details[0].message });
+    }
 
+    const user_id = req.user?.userId;
+    if (!user_id) {
+      deleteUploadedFiles(req.files);
+      return res.status(401).json({ status: false, error: 'Unauthorized' });
+    }
 
+    // ===========================
+    //  PLAN + LIMIT CHECK INSIDE CONTROLLER
+    // ===========================
+    const subscription = await getCurrentAccess(req, res, true);
+
+    const features = subscription?.plan?.features;
+    const maxAllowed = features?.maxEventPosts;
+// console.log(subscription);
+
+    if (subscription.role !== 'Company') {
+      deleteUploadedFiles(req.files);
+      return res.status(403).json({
+        status: false,
+        message: 'Only company accounts can post events.'
+      });
+    }
+
+    // Count current month's events
+    const startOfMonth = new Date();
+    startOfMonth.setDate(1);
+    startOfMonth.setHours(0, 0, 0, 0);
+
+    const countQuery = `
+      SELECT COUNT(*) AS total_events
+      FROM company_events
+      WHERE user_id = $1 AND created_at >= $2 AND is_deleted = false
+    `;
+    const { rows } = await pool.query(countQuery, [user_id, startOfMonth]);
+    const postedCount = parseInt(rows[0].total_events, 10);
+
+    // LIMIT EXCEEDED → STOP + CLEANUP
+    if (maxAllowed !== 'Unlimited' && postedCount >= maxAllowed) {
+      deleteUploadedFiles(req.files);
+
+      return res.status(403).json({
+        status: false,
+        message: `You’ve reached your monthly limit of ${maxAllowed} events.`,
+        current_plan: subscription.plan.name,
+        upgrade_suggestion:
+          subscription.plan.type === 'starter' ? 'growth' : 'professional'
+      });
+    }
+
+    // ===========================
+    //  PAID TICKET CHECK
+    // ===========================
+    const {
+      price_type,
+      event_name,
+      event_types,
+      disability_types,
+      accessibility_types,
+      event_description,
+      start_date,
+      end_date,
+      start_time,
+      end_time,
+      price,
+      total_available_seats,
+      event_address,
+      how_to_reach_destination,
+      latitude,
+      longitude
+    } = req.body;
+
+    if (price_type === 'paid' && !features.canAccessPaidTicket) {
+      deleteUploadedFiles(req.files);
+      return res.status(400).json({
+        status: false,
+        message: `Your current plan (“${subscription.plan.name}”) does not allow paid ticketing. Please upgrade to enable this feature.`,
+        upgrade_suggestion: 'growth'
+      });
+    }
+
+    // ===========================
+    //  FILE PROCESSING
+    // ===========================
+    const thumbnail = req.files?.event_thumbnail?.[0]?.filename || null;
+    const eventImages = req.files?.event_images?.map(f => f.filename) || [];
+
+    // ===========================
+    //  DB INSERT
+    // ===========================
     const query = `
       INSERT INTO company_events (
         user_id, event_name, event_types, disability_types, accessibility_types,
         event_description, event_thumbnail, event_images,
         start_date, end_date, start_time, end_time,
         price_type, price, total_available_seats,
-        event_address, how_to_reach_destination,latitude,longitude
+        event_address, how_to_reach_destination, latitude, longitude
       ) VALUES (
-        $1, $2, $3, $4, $5,
-        $6, $7, $8,
-        $9, $10, $11, $12,
-        $13, $14, $15,
-        $16, $17,$18,$19
+        $1,$2,$3,$4,$5,
+        $6,$7,$8,
+        $9,$10,$11,$12,
+        $13,$14,$15,
+        $16,$17,$18,$19
       ) RETURNING id
     `;
 
@@ -81,13 +144,12 @@ const subscription = await getCurrentAccess(req, res, true);
       }
     };
 
-
     const values = [
       user_id,
       event_name,
-      event_types ? parseArray(event_types) : null,
-      disability_types ? parseArray(disability_types) : null,
-      accessibility_types ? parseArray(accessibility_types) : null,
+      parseArray(event_types),
+      parseArray(disability_types),
+      parseArray(accessibility_types),
       event_description,
       thumbnail,
       eventImages,
@@ -104,39 +166,17 @@ const subscription = await getCurrentAccess(req, res, true);
       longitude
     ];
 
-    const result = await pool.query(query, values);
-    const data = result.rows[0];
+    await pool.query(query, values);
 
-    const userData = await pool.query(
-      'SELECT * FROM users WHERE id = $1',
-      [user_id]
-    );
-
-    const user = userData.rows[0];
-
-    const dynamicData = {
-      title: "New Event Created!",
-      body: `${user.business_name} just create event ${event_name}.`,
-      type: "Event",
-      id: data.id
-    };
-
-    await sendNotification({
-      title: dynamicData.title,
-      message: dynamicData.body,
-      type: dynamicData.type,
-      target: 'NDIS Member',
-      id: data.id,
+    return res.status(201).json({
+      status: true,
+      message: 'Event created successfully.'
     });
 
-
-    res.status(201).json({
-      message: 'Event created successfully.',
-      status: true
-    });
   } catch (err) {
-    console.error('Create Event Error:', err.message);
-    res.status(500).json({ status: false, error: 'Failed to create event.' });
+    console.error("Create Event Error:", err.message);
+    deleteUploadedFiles(req.files);
+    return res.status(500).json({ status: false, error: 'Failed to create event.' });
   }
 };
 

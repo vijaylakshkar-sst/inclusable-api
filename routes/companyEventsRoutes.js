@@ -10,8 +10,8 @@ const { checkCompanyEventLimit } = require('../middleware/checkCompanyEventLimit
 router.post(
   '/company-events/create',
   auth,
-  checkFeatureAccess('canPostEvents'),  
-  checkCompanyEventLimit,
+  // checkFeatureAccess('canPostEvents'),  
+  // checkCompanyEventLimit,
   upload.fields([
     { name: 'event_thumbnail', maxCount: 1 },
     { name: 'event_images', maxCount: 10 }

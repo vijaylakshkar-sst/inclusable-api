@@ -75,21 +75,38 @@ exports.getCurrentAccess = async (req, res, asMiddleware = false) => {
         sp.plan_type,
         sp.trial_days,
         sp.features,
-        sp.audience_role
-       FROM user_subscriptions us
-       JOIN subscription_plans sp ON us.plan_id = sp.id
-       WHERE us.user_id = $1
-       ORDER BY us.updated_at DESC
-       LIMIT 1;`,
+        sp.audience_role,
+        u.stripe_account_status      -- ✅ add this
+      FROM user_subscriptions us
+      JOIN subscription_plans sp ON us.plan_id = sp.id
+      JOIN users u ON u.id = us.user_id       -- ✅ join users table
+      WHERE us.user_id = $1
+      ORDER BY us.updated_at DESC
+      LIMIT 1;`,
       [user_id]
     );
     client.release();
 
     let plan;
     if (result.rows.length === 0) {
-      plan = { plan_type: 'free', name: 'Starter Plan', audience_role: 'NDIS Member', subscription_status: 'active' };
+      // plan = { plan_type: 'free', name: 'Starter Plan', audience_role: 'NDIS Member', subscription_status: 'active' };
+      return res.status(403).json({
+        status: false,
+        message: 'Subscription not found.'
+      });
     } else {
       plan = result.rows[0];
+    }
+
+
+    // ❗ If user is Company → Stripe account must be verified (status = 3)
+    if (plan.audience_role === "Company") {
+      if (plan.stripe_account_status !== 3) {
+        return res.status(403).json({
+          status: false,
+          message: "Your Stripe account is not verified. Please complete your Stripe setup."
+        });
+      }
     }
 
     const now = new Date();
