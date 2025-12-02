@@ -85,7 +85,7 @@ const validateEmail = (email) => {
 const transporter = nodemailer.createTransport({
     host: EMAIL_HOST,
     port: EMAIL_PORT,
-    secure: false, // true for port 465, false for 587
+    secure: true, // true for port 465, false for 587
     auth: {
       user: EMAIL_FROM,
       pass: EMAIL_PASS,
@@ -634,6 +634,31 @@ exports.login = async (req, res) => {
 
     // ✅ If company, add business details
     if (user.role === 'Company') {
+      const querySubscription = `
+      SELECT 
+        us.subscription_status,
+        us.expiry_date,
+        sp.id AS plan_id,
+        sp.name AS plan_name,
+        sp.plan_type,
+        sp.price,
+        sp.currency,
+        sp.description,
+        sp.features,
+        sp.duration,
+        sp.trial_days,
+        sp.audience_role,
+        sp.is_active,
+        sp.icon
+      FROM user_subscriptions us
+      JOIN subscription_plans sp ON us.plan_id = sp.id
+      WHERE us.user_id = $1
+      ORDER BY us.updated_at DESC
+      LIMIT 1;
+    `;
+    const resultSubscription = await client.query(querySubscription, [userId]);
+
+
       userData.business_details = {
         business_name: user.business_name,
         business_category: user.business_category,
@@ -647,7 +672,8 @@ exports.login = async (req, res) => {
         website_url: user.website_url,
         year_experience: user.year_experience,
         address: user.address,
-        business_overview: user.business_overview
+        business_overview: user.business_overview,
+        subscription_status: resultSubscription.rows.length > 0 ? true : false,
       };
     }
 
