@@ -24,6 +24,7 @@ exports.handleInAppWebhook = async (req, res) => {
     originalTransactionId
   } = payload;
 
+  console.log(payload, "payload");
   // ❗ Process ONLY INITIAL_PURCHASE
   if (event_type !== "INITIAL_PURCHASE") {
     return res.status(200).json({
@@ -60,13 +61,31 @@ exports.handleInAppWebhook = async (req, res) => {
     );
 
     const payment_id = paymentResult.rows[0]?.id;
+console.log(payment_id, "payment_id");
 
     // 2️⃣ Create subscription group
+    // const newGroup = await client.query(
+    //   `INSERT INTO user_subscription_groups
+    //    (user_id, plan_id, platform, provider, group_status, auto_renew)
+    //    VALUES ($1,$2,$3,$4,'active',TRUE)
+    //    RETURNING id;`,
+    //   [user_id, plan_id, platform || 'web', provider || 'iap']
+    // );
+
+    // const group_id = newGroup.rows[0].id;
+
     const newGroup = await client.query(
       `INSERT INTO user_subscription_groups
-       (user_id, plan_id, platform, provider, group_status, auto_renew)
-       VALUES ($1,$2,$3,$4,'active',TRUE)
-       RETURNING id;`,
+        (user_id, plan_id, platform, provider, group_status, auto_renew)
+      VALUES ($1, $2, $3, $4, 'active', TRUE)
+      ON CONFLICT (user_id, plan_id)
+      DO UPDATE SET
+          platform = EXCLUDED.platform,
+          provider = EXCLUDED.provider,
+          group_status = 'active',
+          auto_renew = TRUE,
+          updated_at = NOW()
+      RETURNING id;`,
       [user_id, plan_id, platform || 'web', provider || 'iap']
     );
 
@@ -84,7 +103,7 @@ exports.handleInAppWebhook = async (req, res) => {
       `INSERT INTO user_subscriptions
        (user_id, plan_id, platform, subscription_status, start_date, expiry_date, next_renewal_date, auto_renew, last_payment_id, originalTransactionId)
        VALUES ($1,$2,$3,'active',NOW(),$4,$4,TRUE,$5,$6)
-       ON CONFLICT (user_id, plan_id) DO UPDATE
+       ON CONFLICT (originalTransactionId) DO UPDATE
        SET subscription_status='active',
            expiry_date=$4,
            next_renewal_date=$4,
@@ -119,7 +138,7 @@ function decodePart(part) {
 }
 
 exports.AppleWebhook = async (req, res) => {
- try {
+  try {
     const payload = req.body;
 
     if (!payload.signedPayload) {
@@ -127,7 +146,7 @@ exports.AppleWebhook = async (req, res) => {
       return res.status(400).send("Missing signedPayload");
     }
 
-    // 👉 Split JWT
+    // Split JWT
     const parts = payload.signedPayload.split(".");
     const mainDecoded = decodePart(parts[1]);
 
@@ -140,15 +159,52 @@ exports.AppleWebhook = async (req, res) => {
 
     const data = mainDecoded.data;
 
-    let status = "active";
     const notificationType = mainDecoded.notificationType;
     const notificationSubType = mainDecoded.subtype || null;
 
-    // Map statuses
-    if (notificationType === "EXPIRED") status = "expired";
-    if (notificationSubType === "AUTO_RENEW_DISABLED") status = "cancelled";
+    console.log("🔔 notificationType:", notificationType);
+    console.log("🔔 notificationSubType:", notificationSubType);
 
-    // Check transaction
+    // ---------------------------------------------------------------------
+    // 1️⃣ DETERMINE STATUS + AUTO RENEW
+    // ---------------------------------------------------------------------
+    let status = "active";
+    let autoRenew = true;
+
+    switch (notificationType) {
+      case "EXPIRED":
+        status = "expired";
+        break;
+
+      case "REFUND":
+      case "REVOKE":
+        status = "cancelled";
+        autoRenew = false;
+        break;
+
+      case "SUBSCRIBED":
+      case "DID_RENEW":
+        status = "active";
+        autoRenew = true;
+        break;
+
+      case "DID_CHANGE_RENEWAL_STATUS":
+        autoRenew = notificationSubType !== "AUTO_RENEW_DISABLED";
+        break;
+
+      case "DID_CHANGE_RENEWAL_PREF": // UPGRADE / DOWNGRADE
+        status = "active";
+        break;
+    }
+
+    // Specific subtype handling
+    if (notificationSubType === "DOWNGRADE" || notificationSubType === "UPGRADE") {
+      status = "active"; // Only plan changes, subscription is still active
+    }
+
+    // ---------------------------------------------------------------------
+    // 2️⃣ TRANSACTION INFO
+    // ---------------------------------------------------------------------
     if (!data.signedTransactionInfo) {
       console.log("❌ Missing signedTransactionInfo");
       return res.send("OK");
@@ -159,27 +215,37 @@ exports.AppleWebhook = async (req, res) => {
 
     console.log("🧾 MAIN TRANSACTION:", decodedTrans);
 
-    // Extract fields
     let originalTransactionId = decodedTrans.originalTransactionId;
     let transactionId = decodedTrans.transactionId;
     let productId = decodedTrans.productId;
+
     let expiresDate = decodedTrans.expiresDate
       ? new Date(decodedTrans.expiresDate).toISOString()
       : null;
 
-    // Check Renewal Info (upgrade/downgrade)
+    // ---------------------------------------------------------------------
+    // 3️⃣ RENEWAL INFO (Auto-Renew, Downgrade/Upgrade Product)
+    // ---------------------------------------------------------------------
     if (data.signedRenewalInfo) {
       const renewalParts = data.signedRenewalInfo.split(".");
       const decodedRenewal = decodePart(renewalParts[1]);
 
       console.log("🔄 RENEWAL INFO:", decodedRenewal);
 
+      // This holds the changed plan after UPGRADE / DOWNGRADE
       if (decodedRenewal.autoRenewProductId) {
         productId = decodedRenewal.autoRenewProductId;
+        console.log("🔁 Updated ProductId (Upgrade/Downgrade):", productId);
+      }
+
+      if (decodedRenewal.autoRenewStatus) {
+        autoRenew = decodedRenewal.autoRenewStatus === 1;
       }
     }
 
-    // Get subscription plan by productId (YOU MUST MAP THIS)
+    // ---------------------------------------------------------------------
+    // 4️⃣ GET PLAN BY PRODUCT ID
+    // ---------------------------------------------------------------------
     const planQuery = await pool.query(
       "SELECT id, duration, audience_role FROM subscription_plans WHERE productId=$1 LIMIT 1",
       [productId]
@@ -192,57 +258,65 @@ exports.AppleWebhook = async (req, res) => {
 
     const plan = planQuery.rows[0];
 
-
-    // Get User subscription 
+    // ---------------------------------------------------------------------
+    // 5️⃣ GET USER SUBSCRIPTION BY originalTransactionId
+    // ---------------------------------------------------------------------
     const UserSubscriptionQuery = await pool.query(
       "SELECT * FROM user_subscriptions WHERE originalTransactionId=$1 LIMIT 1",
       [originalTransactionId]
     );
 
-    if (UserSubscriptionQuery.rows.length > 0) {
-      console.log("❌ No Use SUbscription for:", originalTransactionId);
+    if (UserSubscriptionQuery.rows.length === 0) {
+      console.log("❌ No User Subscription for:", originalTransactionId);
       return res.send("OK");
     }
 
     const UserSubscription = UserSubscriptionQuery.rows[0];
-console.log(UserSubscription,'UserSubscription');
+    console.log("👤 UserSubscription:", UserSubscription);
 
-    // ==========================================
-    // 🚀 Insert / Update user_subscription_group
-    // ==========================================
-    let groupResult = await pool.query(
+    const userId = UserSubscription.user_id;
+
+    // ---------------------------------------------------------------------
+    // 6️⃣ INSERT / UPDATE user_subscription_groups
+    // ---------------------------------------------------------------------
+    const groupResult = await pool.query(
       `
       INSERT INTO user_subscription_groups 
       (user_id, plan_id, platform, provider, group_status, auto_renew)
-      VALUES ($1, $2, 'ios', 'apple', 'active', true)
-      ON CONFLICT (user_id, plan_id) DO UPDATE SET updated_at = NOW()
+      VALUES ($1, $2, 'ios', 'apple', $3, $4)
+      ON CONFLICT (user_id, plan_id)
+      DO UPDATE SET 
+          auto_renew = EXCLUDED.auto_renew,
+          updated_at = NOW()
       RETURNING *;
       `,
-      [UserSubscription.user_id, plan.id] /* ORIGINAL_TRANSACTION_ID used as user_id placeholder */
+      [userId, plan.id, status, autoRenew]
     );
 
     const group = groupResult.rows[0];
 
-    // ==========================================
-    // 🚀 Insert / Update main user_subscriptions
-    // ==========================================
+    // ---------------------------------------------------------------------
+    // 7️⃣ INSERT / UPDATE user_subscriptions
+    // ---------------------------------------------------------------------
     await pool.query(
       `
       INSERT INTO user_subscriptions 
-      (user_id, plan_id, platform, subscription_status, start_date, expiry_date, auto_renew)
-      VALUES ($1, $2, 'ios', $3, NOW(), $4, true)
-      ON CONFLICT (user_id, plan_id)
+      (user_id, plan_id, platform, subscription_status, start_date, expiry_date, auto_renew, originalTransactionId)
+      VALUES ($1, $2, 'ios', $3, NOW(), $4, $5, $6)
+      ON CONFLICT (originalTransactionId)
       DO UPDATE SET 
+          plan_id = EXCLUDED.plan_id,
           subscription_status = EXCLUDED.subscription_status,
           expiry_date = EXCLUDED.expiry_date,
+          auto_renew = EXCLUDED.auto_renew,
           updated_at = NOW();
       `,
-      [UserSubscription.user_id, plan.id, status, expiresDate]
+      [userId, plan.id, status, expiresDate, autoRenew, originalTransactionId]
     );
 
-    // ==========================================
-    // 🚀 Insert renewal history (one log per transaction)
-    // ==========================================
+    // ---------------------------------------------------------------------
+    // 8️⃣ INSERT RENEWAL HISTORY
+    // ---------------------------------------------------------------------
     await pool.query(
       `
       INSERT INTO user_subscription_renewals
@@ -263,6 +337,7 @@ console.log(UserSubscription,'UserSubscription');
 
     console.log("✅ Subscription processed successfully");
     return res.send("OK");
+
   } catch (err) {
     console.error("❌ Apple Webhook Error:", err);
     return res.status(500).send("Error");

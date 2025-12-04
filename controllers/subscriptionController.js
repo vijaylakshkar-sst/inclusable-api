@@ -161,7 +161,7 @@ exports.startFreeTrial = async (req, res) => {
       `INSERT INTO user_subscriptions
        (user_id, plan_id, platform, subscription_status, start_date, expiry_date, next_renewal_date, auto_renew, last_payment_id)
        VALUES ($1, $2, $3, 'trial', NOW(), $4, $4, FALSE, $5)
-       ON CONFLICT (user_id, plan_id) DO UPDATE
+       ON CONFLICT (originalTransactionId) DO UPDATE
          SET subscription_status='trial', expiry_date=$4, next_renewal_date=$4, auto_renew=FALSE, last_payment_id=$5, updated_at=NOW();`,
       [user_id, plan_id, platform, expiry_date, payment_id]
     );
