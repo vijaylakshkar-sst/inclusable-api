@@ -513,6 +513,8 @@ exports.login = async (req, res) => {
 
   const { email, password,fcm_token } = req.body;
   
+  const client = await pool.connect();
+  
   // New comprehensive validation
   if (!email || !password) {
     return res.status(400).json({ error: 'Email and password are required.' });
@@ -1646,5 +1648,23 @@ exports.getStripeKeys = async (req, res) => {
       status: false,
       message: "Internal server error"
     });
+  }
+};
+
+exports.privacyPolicy = async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM privacy_policies ORDER BY created_at DESC');
+    res.json({ status: true, data: result.rows });
+  } catch (err) {
+    res.status(500).json({ status: false, data: err.message });
+  }
+};
+
+exports.termCondition = async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM terms_conditions ORDER BY created_at DESC');
+    res.json({status:true, data: result.rows});
+  } catch (err) {
+    res.status(500).json({status:false, error: err.message });
   }
 };

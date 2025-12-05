@@ -35,6 +35,9 @@ router.post("/stripe/create-bank-link", userController.createBankLink);
 router.post('/stripe/onboarding/connect', auth, StripeConnectController.createAccountLink);
 router.post('/stripe/onboarding/complete', auth, StripeConnectController.completeOnboarding);
 
+router.get('/privacy-policy', userController.privacyPolicy);
+router.get('/term-condition', userController.termCondition);
+
 router.get("/stripe/web/onboarding_success", (req, res) => {
   res.send(`
     <!DOCTYPE html>

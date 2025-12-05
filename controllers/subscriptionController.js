@@ -255,7 +255,10 @@ exports.getCurrentSubscription = async (req, res) => {
           is_active: plan.is_active,
           icon_url: fullIconUrl
         },
-        access:subscription.plan.features
+        access: {
+          ...subscription.plan.features,
+          stripeVerificationRequired: subscription.plan.stripe_verified ? false : true
+        }
       }
     });
   } catch (err) {

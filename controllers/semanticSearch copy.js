@@ -2,7 +2,6 @@ const axios = require('axios');
 const crypto = require('crypto');
 require('dotenv').config();
 const pool = require('../dbconfig');
-const { stat } = require('fs');
 
 function toPgVectorString(arr) {
   if (!Array.isArray(arr)) {
@@ -21,19 +20,6 @@ function toPgVectorString(arr) {
 
   return `[${arr.join(',')}]`;
 }
-
-// near the top of controllers/semanticSearch.js
-// function hasRealTime(dateStr) {
-//   if (!dateStr) return false;
-//   const d = new Date(dateStr);
-//   // treat midnight as "no time specified"
-//   return !(
-//     d.getUTCHours() === 0 &&
-//     d.getUTCMinutes() === 0 &&
-//     d.getUTCSeconds() === 0
-//   );
-// }
-
 
 function sanitizeNumber(value) {
   if (value === null || value === undefined) return null;
@@ -261,46 +247,26 @@ Omit image_url. Use null for missing data.
           'Authorization': `Bearer ${process.env.PERPLEXITY_API_KEY}`,
           'Content-Type': 'application/json'
         },
-        timeout: 10000, // 10s timeout (shorter than wrapper timeout to prevent axios timeout errors)
+        timeout: 15000,
       }
     );
 
     const content = response.data.choices[0].message.content;
     return parsePerplexityResponse(content, query, startDate);
   } catch (err) {
-    // Handle timeout errors silently - they're expected and will fall back to database
-    if (err.code === 'ECONNABORTED' || err.message.includes('timeout')) {
-      // Timeout is expected, silently return null to fall back to database results
-      return null;
-    }
-    // Only log non-timeout errors (API errors, network issues, etc.)
-    if (err.response) {
-      // API returned an error response
-      console.warn(`⚠️ Perplexity API error (${err.response.status}): ${err.response.statusText}`);
-    } else if (err.request && !err.code) {
-      // Request was made but no response received (network issue)
-      console.warn('⚠️ Perplexity request failed: No response received');
-    } else {
-      // Other errors
-      console.warn(`⚠️ Perplexity search error: ${err.message}`);
-    }
+    console.error('❌ Perplexity search failed:', err.message);
     return null;
   }
 }
 
 
 async function searchWithTimeout(query, category, location, startDate) {
-  // Use a slightly longer timeout than axios to ensure wrapper timeout wins
   const timeoutPromise = new Promise((resolve) => {
-    setTimeout(() => {
-      // Timeout reached - silently return null to fall back to database
-      resolve(null);
-    }, 11000); // 11s timeout (longer than axios 10s, ensures wrapper timeout always wins)
+    setTimeout(() => resolve(null), 12000); // 12s timeout
   });
 
   const searchPromise = searchWithPerplexity(query, category, location, startDate);
 
-  // Race between search and timeout - whichever finishes first wins
   return Promise.race([searchPromise, timeoutPromise]);
 }
 
@@ -545,7 +511,7 @@ function parsePerplexityResponse(content, originalQuery, startDate) {
     //   ];
     // }
 
-  
+
 
 
     if (!Array.isArray(events) || events.length === 0) {
@@ -559,10 +525,10 @@ function parsePerplexityResponse(content, originalQuery, startDate) {
       };
     }
 
-  // ==============================
+    // ==============================
     // LOCATION PARSING
     // ==============================
-    
+
     const parseLocation = (loc) => {
       if (!loc) return { suburb: null, state: null, postcode: null, latitude: null, longitude: null };
 
@@ -1291,64 +1257,46 @@ exports.semanticSearch = async (req, res) => {
     const totalCount = parseInt(countResult.rows[0].total, 10);
     const totalPages = Math.ceil(totalCount / limitNum);
 
-    // Check if we should try Perplexity as a fallback
-    // Only use Perplexity if database has NO results, or similarity is very poor (> 0.25)
-    const shouldTryPerplexity = result.rows.length === 0 || (embedding && result.rows[0]?.similarity > 0.25);
 
-    if (shouldTryPerplexity && perplexityPromise) {
-      // We already started Perplexity search - just wait for it
-      // console.log('⏳ Waiting for Perplexity results (already in progress)...');
-      const perplexityResults = await perplexityPromise;
+    if (result.rows.length === 0 || (embedding && result.rows[0]?.similarity > 0.15)) {
+      // Database results are poor or empty
 
-      // Handle Perplexity results (could be array, null, or error object)
-      if (perplexityResults && Array.isArray(perplexityResults) && perplexityResults.length > 0) {
-        // Success: Perplexity returned valid events
-        console.log(`✅ Perplexity returned ${perplexityResults.length} results`);
-        await persistPerplexityEvents(perplexityResults);
-        return res.json({
-          status: true,
-          data: perplexityResults,
-          source: 'perplexity',
-          message: 'Events found from web search.',
-          pagination: {
-            page: pageNum,
-            totalPages: 1,
-            total: perplexityResults.length,
-            limit: perplexityResults.length,
-            hasNextPage: false,
-            hasPreviousPage: false
-          }
-        });
-      } else if (perplexityResults?.statusCode === 404) {
-        // Perplexity explicitly returned 404 (no events found)
-        // Fall back to database results if available
-        if (result.rows.length > 0) {
-          console.log(`⚠️ Perplexity found no events, falling back to ${result.rows.length} database results`);
-          // Continue to return database results below
-        } else {
-          // Both database and Perplexity have no results
+      if (perplexityPromise) {
+        // We already started Perplexity search - just wait for it
+        // console.log('⏳ Waiting for Perplexity results (already in progress)...');
+        const perplexityResults = await perplexityPromise;
+
+        // If parsePerplexityResponse returned NOT FOUND error
+        if (perplexityResults?.statusCode === 404) {
           return res.status(404).json(perplexityResults);
         }
-      } else {
-        // Perplexity returned null (timeout or error) - silently fall back to database
-        if (result.rows.length > 0) {
-          // Database has results, use them (no need to log - this is expected behavior)
-          // Continue to return database results below
-        } else {
-          // Perplexity timed out/failed AND database has no results
-          return res.status(404).json({
-            error: 'No upcoming events found',
-            status: false,
-            message: 'No upcoming events match your search. Try different keywords or check back later for new events.'
+
+
+        if (perplexityResults && perplexityResults.length > 0) {
+          console.log(`✅ Perplexity returned ${perplexityResults.length} results`);
+          await persistPerplexityEvents(perplexityResults);
+          return res.json({
+            status: true,
+            data: perplexityResults,
+            source: 'perplexity',
+            message: 'Events found from web search.',
+            pagination: {
+              page: pageNum,
+              totalPages: 1,
+              total: perplexityResults.length,
+              limit: perplexityResults.length,
+              hasNextPage: false,
+              hasPreviousPage: false
+            }
           });
         }
+
       }
-      // If Perplexity failed/timed out but we have database results, fall through to return them
-    } else if (result.rows.length === 0) {
-      // No database results and no Perplexity search was initiated (no query provided)
+
+      // If no query or Perplexity also fails
       return res.status(404).json({
         error: 'No upcoming events found',
-        status: false,
+        statusCode: 404,
         message: 'No upcoming events match your search. Try different keywords or check back later for new events.'
       });
     }
@@ -1356,7 +1304,7 @@ exports.semanticSearch = async (req, res) => {
     // Apply improved filtering logic (only if embedding exists)
     let finalResults = result.rows;
 
-    if (embedding && result.rows.length > 0) {
+    if (embedding) {
       const bestSimilarity = result.rows[0].similarity;
       const hasExactKeywordMatch = result.rows.some(row => row.has_exact_keywords);
 
@@ -1365,23 +1313,8 @@ exports.semanticSearch = async (req, res) => {
       } else if (bestSimilarity < 0.08) {
         finalResults = result.rows.filter(row => row.similarity < 0.08);
       }
-      // If no exact match and similarity >= 0.08, return all results (already set above)
-      
-      // Safety check: if filtering removed all results, fall back to original results
-      if (finalResults.length === 0 && result.rows.length > 0) {
-        console.log(`⚠️ Filtering removed all results, falling back to all ${result.rows.length} database results`);
-        finalResults = result.rows;
-      }
     }
 
-    // Final safety check: if we still have no results, return 404
-    if (finalResults.length === 0) {
-      return res.status(404).json({
-        error: 'No upcoming events found',
-        status: false,
-        message: 'No upcoming events match your search. Try different keywords or check back later for new events.'
-      });
-    }
 
     console.log(`Found ${totalCount} total results, returning page ${pageNum} with ${finalResults.length} results`);
 
@@ -1398,26 +1331,8 @@ exports.semanticSearch = async (req, res) => {
       }
     });
 
-
-//     res.json({
-//   results: finalResults.map(ev => ({
-//     ...ev,
-//     has_time: hasRealTime(ev.start_date) || hasRealTime(ev.end_date)
-//   })),
-//   pagination: {
-//     currentPage: pageNum,
-//     totalPages: totalPages,
-//     totalResults: totalCount,
-//     resultsPerPage: limitNum,
-//     hasNextPage: pageNum < totalPages,
-//     hasPreviousPage: pageNum > 1
-//   }
-// });
-
   } catch (err) {
     console.error('❌ Semantic search error:', err.message);
     res.status(500).json({ error: 'Internal Server Error' });
   }
 };
-
-
