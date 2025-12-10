@@ -1077,3 +1077,49 @@ exports.getHistory = async (req, res) => {
         client.release();
     }
 };
+
+exports.getMakes = async (req, res) => {
+  try {
+    const result = await pool.query(`SELECT id, name FROM vehicle_makes ORDER BY name ASC`);
+    res.json({ status: true, data: result.rows });
+  } catch (err) {
+    res.status(500).json({ status: false, message: err.message });
+  }
+};
+
+exports.getModelsByMake = async (req, res) => {
+  try {
+    const { make_id } = req.params;
+
+    const query = `
+      SELECT id, name 
+      FROM vehicle_models 
+      WHERE make_id = $1
+      ORDER BY name ASC
+    `;
+
+    const result = await pool.query(query, [make_id]);
+
+    res.json({ status: true, data: result.rows });
+  } catch (err) {
+    res.status(500).json({ status: false, message: err.message });
+  }
+};
+
+exports.getDisabilityFeaturs = async (req, res) => {
+  try {
+    const result = await pool.query(`SELECT id, name FROM disability_features ORDER BY name ASC`);
+    res.json({ status: true, data: result.rows });
+  } catch (err) {
+    res.status(500).json({ status: false, message: err.message });
+  }
+};
+
+exports.getVehicleTypes = async (req, res) => {
+  try {
+    const result = await pool.query(`SELECT * FROM cab_types ORDER BY name ASC`);
+    res.json({ status: true, data: result.rows });
+  } catch (err) {
+    res.status(500).json({ status: false, message: err.message });
+  }
+};

@@ -2,7 +2,6 @@ const axios = require('axios');
 const crypto = require('crypto');
 require('dotenv').config();
 const pool = require('../dbconfig');
-const { stat } = require('fs');
 
 function toPgVectorString(arr) {
   if (!Array.isArray(arr)) {
@@ -80,15 +79,66 @@ function generateDeterministicEventId(event, fallbackIndex = 0) {
   return `perplexity-${hash.slice(0, 32)}`;
 }
 
+// Shared constants for Australia filtering
+const AUSTRALIAN_STATES = ['NSW', 'VIC', 'QLD', 'WA', 'SA', 'TAS', 'ACT', 'NT'];
+const NON_AUSTRALIAN_CITIES = ['zurich', 'london', 'paris', 'new york', 'tokyo', 'berlin', 'madrid', 'rome', 'amsterdam', 'vienna', 'stockholm', 'oslo', 'copenhagen', 'helsinki', 'dublin', 'brussels', 'lisbon', 'athens', 'prague', 'budapest', 'warsaw', 'geneva', 'basel', 'bern', 'lausanne'];
+
+// Shared function to check if event is in Australia
+function isEventInAustralia(event) {
+  // Check coordinates
+  const lat = event.latitude || event.lat || null;
+  const lng = event.longitude || event.lng || event.lon || null;
+  
+  if (lat !== null && lng !== null) {
+    const latNum = Number(lat);
+    const lngNum = Number(lng);
+    if (!isNaN(latNum) && !isNaN(lngNum)) {
+      // Reject positive latitudes (northern hemisphere)
+      if (latNum > 0) return false;
+      // Check Australia bounds: lat -44 to -10, lng 113 to 154
+      if (latNum < -44 || latNum > -10 || lngNum < 113 || lngNum > 154) return false;
+    }
+  }
+  
+  // Check suburb
+  if (event.suburb) {
+    const suburbLower = String(event.suburb).toLowerCase().trim();
+    if (suburbLower === 'zurich' || NON_AUSTRALIAN_CITIES.includes(suburbLower)) return false;
+  }
+  
+  // Check title/description for Zurich
+  const titleDesc = `${event.title || ''} ${event.description || ''}`.toLowerCase();
+  if (titleDesc.includes('zurich')) return false;
+  
+  // Check state
+  if (event.state) {
+    const stateUpper = String(event.state).toUpperCase().trim();
+    if (!AUSTRALIAN_STATES.includes(stateUpper)) return false;
+  }
+  
+  return true;
+}
+
 async function persistPerplexityEvents(events) {
   if (!Array.isArray(events) || events.length === 0) {
     return;
   }
 
+  // Filter: Only persist Australian events
+  const filteredEvents = events.filter(isEventInAustralia);
+  
+  if (filteredEvents.length === 0) {
+    return;
+  }
+  
+  if (filteredEvents.length < events.length) {
+    console.log(`🌏 Filtered out ${events.length - filteredEvents.length} non-Australian events before persistence`);
+  }
+
   const client = await pool.connect();
 
   try {
-    for (const event of events) {
+    for (const event of filteredEvents) {
       const eventId = event.id || generateDeterministicEventId(event);
       const embeddingText = buildEmbeddingText(event);
 
@@ -194,7 +244,18 @@ async function searchWithPerplexity(query, category, location, startDate) {
     const now = new Date();
     const currentDateTime = now.toISOString();
 
-    let searchQuery = `Find 5-8 upcoming events related to "${query}"`;
+    let searchQuery = `Find 5-8 upcoming events related to "${query}" in Australia ONLY.`;
+
+    // CRITICAL: Explicitly restrict to Australia with examples of what NOT to include
+    searchQuery += ` 
+
+CRITICAL REQUIREMENTS:
+- ONLY return events located in Australia
+- Events MUST be in one of these Australian states/territories: NSW, VIC, QLD, WA, SA, TAS, ACT, or NT
+- DO NOT include events from ANY other country (USA, UK, Canada, New Zealand, Europe, Asia, etc.)
+- DO NOT include events from cities like: Zurich, London, Paris, New York, Tokyo, Berlin, Madrid, Rome, Amsterdam, Vienna, Stockholm, Oslo, Copenhagen, Helsinki, Dublin, Brussels, Lisbon, Athens, Prague, Budapest, Warsaw, Geneva, Basel, Bern, Lausanne, or any other non-Australian city
+- Coordinates MUST be within Australia bounds: latitude between -44 and -10 (southern hemisphere), longitude between 113 and 154 (eastern hemisphere)
+- If an event is in Zurich, Switzerland, London, UK, or any other non-Australian location, DO NOT include it`;
 
     if (startDate) {
       const formattedStartDate = new Date(startDate).toISOString();
@@ -208,7 +269,7 @@ async function searchWithPerplexity(query, category, location, startDate) {
     }
 
     if (location) {
-      searchQuery += ` Prioritize events near ${location.suburb || location.state || 'Australia'}.`;
+      searchQuery += ` Prioritize events near ${location.suburb || location.state || 'Australia'}, Australia.`;
     }
 
     searchQuery += `
@@ -233,6 +294,11 @@ Format:
 ]
 
 Omit image_url. Use null for missing data.
+
+CRITICAL: Only include events from Australia (states: NSW, VIC, QLD, WA, SA, TAS, ACT, NT).
+DO NOT include events from Zurich, Switzerland or any other non-Australian location.
+Coordinates must be within Australia: latitude between -44 and -10, longitude between 113 and 154.
+If you find events in Zurich, London, Paris, New York, or any other non-Australian city, DO NOT include them in the results.
 `;
 
 
@@ -243,7 +309,7 @@ Omit image_url. Use null for missing data.
         messages: [
           {
             role: 'system',
-            content: 'Return ONLY valid, complete JSON arrays. Never add text before/after. Omit image_url fields.'
+            content: 'Return ONLY valid, complete JSON arrays. Never add text before/after. Omit image_url fields. CRITICAL: Only return events from Australia (states: NSW, VIC, QLD, WA, SA, TAS, ACT, NT). STRICTLY EXCLUDE all events from other countries including but not limited to: USA, UK, Canada, New Zealand, Switzerland (Zurich), Germany, France, Spain, Italy, Netherlands, Belgium, Austria, Sweden, Norway, Denmark, Finland, Poland, Greece, Ireland, Czech Republic, Hungary, Romania, Portugal, and any other non-Australian country. If coordinates are provided, they MUST be within Australia bounds: latitude -44 to -10, longitude 113 to 154. Reject any event with coordinates outside these bounds or in non-Australian cities.'
           },
           {
             role: 'user',
@@ -311,6 +377,161 @@ function parsePerplexityResponse(content, originalQuery, startDate) {
     const filterDate = startDate ? new Date(startDate) : now;
 
     let events = [];
+
+    // ==============================
+    // AUSTRALIA FILTERING FUNCTION
+    // ==============================
+    // Negative indicators (other countries and cities) - defined before function
+    const nonAustralianIndicators = [
+      // USA
+      'united states', 'usa', 'us', 'new york', 'california', 'texas', 'florida',
+      'los angeles', 'chicago', 'houston', 'phoenix', 'philadelphia', 'san antonio',
+      'san diego', 'dallas', 'san jose', 'austin', 'jacksonville', 'san francisco',
+      // UK
+      'london', 'england', 'uk', 'united kingdom', 'britain', 'scotland', 'wales',
+      'manchester', 'birmingham', 'liverpool', 'leeds', 'glasgow', 'edinburgh',
+      // Canada
+      'canada', 'toronto', 'vancouver', 'montreal', 'ontario', 'british columbia',
+      'calgary', 'ottawa', 'edmonton', 'winnipeg', 'quebec',
+      // New Zealand
+      'new zealand', 'auckland', 'wellington', 'christchurch', 'dunedin',
+      // Asia
+      'singapore', 'malaysia', 'indonesia', 'thailand', 'philippines',
+      'japan', 'tokyo', 'osaka', 'kyoto', 'yokohama', 'china', 'beijing', 'shanghai',
+      'hong kong', 'taiwan', 'taipei', 'india', 'mumbai', 'delhi', 'bangalore',
+      'kolkata', 'chennai', 'hyderabad', 'pune', 'south korea', 'seoul', 'busan',
+      // Europe
+      'france', 'paris', 'lyon', 'marseille', 'toulouse', 'nice', 'germany', 'berlin',
+      'munich', 'hamburg', 'frankfurt', 'cologne', 'stuttgart', 'spain', 'madrid',
+      'barcelona', 'valencia', 'seville', 'italy', 'rome', 'milan', 'naples', 'turin',
+      'palermo', 'genoa', 'bologna', 'florence', 'venice', 'switzerland', 'zurich',
+      'geneva', 'basel', 'bern', 'lausanne', 'netherlands', 'amsterdam', 'rotterdam',
+      'the hague', 'utrecht', 'eindhoven', 'belgium', 'brussels', 'antwerp', 'ghent',
+      'portugal', 'lisbon', 'porto', 'austria', 'vienna', 'salzburg', 'graz',
+      'sweden', 'stockholm', 'gothenburg', 'norway', 'oslo', 'bergen', 'denmark',
+      'copenhagen', 'aarhus', 'finland', 'helsinki', 'poland', 'warsaw', 'krakow',
+      'greece', 'athens', 'thessaloniki', 'ireland', 'dublin', 'cork', 'czech',
+      'prague', 'hungary', 'budapest', 'romania', 'bucharest',
+      // Latin America
+      'brazil', 'sao paulo', 'rio de janeiro', 'brasilia', 'salvador', 'fortaleza',
+      'belo horizonte', 'mexico', 'mexico city', 'guadalajara', 'monterrey', 'puebla',
+      'argentina', 'buenos aires', 'cordoba', 'rosario', 'chile', 'santiago', 'valparaiso',
+      'colombia', 'bogota', 'medellin', 'cali', 'peru', 'lima', 'venezuela', 'caracas',
+      // Middle East
+      'dubai', 'abu dhabi', 'riyadh', 'jeddah', 'tel aviv', 'jerusalem', 'istanbul',
+      'ankara', 'cairo', 'alexandria',
+      // Africa
+      'south africa', 'johannesburg', 'cape town', 'durban', 'pretoria', 'cairo',
+      'lagos', 'nairobi', 'casablanca'
+    ];
+    
+    function isEventInAustralia(event) {
+      // FIRST: Check coordinates - this is the most reliable check
+      // Australia bounds: lat -10 to -44 (southern hemisphere), lng 113 to 154 (eastern hemisphere)
+      // Check all possible locations: top-level, location object, address object, place object
+      const lat = event.latitude || event.lat ||
+                  event.location?.latitude || event.location?.lat || 
+                  event.address?.latitude || event.address?.lat ||
+                  event.place?.latitude || event.place?.lat || null;
+      const lng = event.longitude || event.lng || event.lon ||
+                  event.location?.longitude || event.location?.lng || 
+                  event.location?.lon ||
+                  event.address?.longitude || event.address?.lng || event.address?.lon ||
+                  event.place?.longitude || event.place?.lng || event.place?.lon || null;
+      
+      // Track if coordinates are in Australia
+      let coordinatesInAustralia = false;
+      if (lat !== null && lng !== null) {
+        const latNum = Number(lat);
+        const lngNum = Number(lng);
+        // If coordinates are valid numbers, check bounds strictly
+        if (!isNaN(latNum) && !isNaN(lngNum)) {
+          // Australia's bounds: lat -44 to -10 (southern hemisphere, ALL NEGATIVE), lng 113 to 154 (eastern hemisphere)
+          // Reject if:
+          // - Latitude is positive (northern hemisphere) - Australia is in southern hemisphere
+          // - Latitude is outside -44 to -10 range
+          // - Longitude is outside 113 to 154 range
+          
+          // Reject positive latitudes (northern hemisphere) immediately
+          if (latNum > 0) return false;
+          
+          // Check if coordinates are within Australia bounds
+          if (latNum >= -44 && latNum <= -10 && lngNum >= 113 && lngNum <= 154) {
+            coordinatesInAustralia = true;
+          } else {
+            return false;
+          }
+        }
+      }
+
+      // SECOND: Check suburb/city name directly for known non-Australian cities
+      // Check all possible locations: top-level, location object, address object, place object
+      const suburb = event.suburb || event.city ||
+                     event.location?.suburb || event.location?.city || 
+                     event.address?.suburb || event.address?.city ||
+                     event.place?.suburb || event.place?.city || null;
+      
+      if (suburb) {
+        const suburbLower = String(suburb).toLowerCase().trim();
+        
+        // Reject Zurich and other non-Australian cities
+        if (suburbLower === 'zurich' || NON_AUSTRALIAN_CITIES.includes(suburbLower)) {
+          return false;
+        }
+        
+        // Check against extended non-Australian indicators
+        const isNonAustralian = nonAustralianIndicators.some(indicator => {
+          return suburbLower === indicator || suburbLower.includes(indicator) || indicator.includes(suburbLower);
+        });
+        if (isNonAustralian) return false;
+      }
+
+      // THIRD: Check state code
+      // Check all possible locations: top-level, location object, address object, place object
+      const state = event.state ||
+                    event.location?.state || event.address?.state || event.place?.state || null;
+      if (state) {
+        const stateUpper = String(state).toUpperCase().trim();
+        if (AUSTRALIAN_STATES.includes(stateUpper)) {
+          return true;
+        }
+        if (stateUpper.length > 0) return false;
+      }
+
+      // FOURTH: Check location strings for Australian indicators
+      const locationStr = JSON.stringify(event.location || event.address || event.place || '').toLowerCase();
+      const titleDescStr = `${event.title || ''} ${event.description || ''}`.toLowerCase();
+      const suburbStr = suburb ? String(suburb).toLowerCase() : '';
+      const combinedStr = `${locationStr} ${titleDescStr} ${suburbStr}`;
+      
+      // Reject if "Zurich" appears anywhere
+      if (combinedStr.includes('zurich')) return false;
+      
+      // Positive indicators
+      const australianIndicators = [
+        'australia', 'australian', 'sydney', 'melbourne', 'brisbane', 'perth', 
+        'adelaide', 'hobart', 'darwin', 'canberra', 'nsw', 'vic', 'qld', 'wa', 
+        'sa', 'tas', 'act', 'nt', 'new south wales', 'victoria', 'queensland',
+        'western australia', 'south australia', 'tasmania', 'australian capital territory',
+        'northern territory'
+      ];
+      
+      // Reject if non-Australian indicators found
+      if (nonAustralianIndicators.some(indicator => combinedStr.includes(indicator))) {
+        return false;
+      }
+      
+      // Accept if at least one positive indicator found
+      const hasAustralianIndicator = australianIndicators.some(indicator => combinedStr.includes(indicator));
+      const hasAustralianState = (state && AUSTRALIAN_STATES.includes(String(state).toUpperCase().trim()));
+      
+      if (coordinatesInAustralia || hasAustralianState || hasAustralianIndicator) {
+        return true;
+      }
+
+      // Reject if no clear positive indicators
+      return false;
+    }
 
     // ==============================
     // CATEGORY MAPPING LOGIC
@@ -522,31 +743,16 @@ function parsePerplexityResponse(content, originalQuery, startDate) {
       }
     }
 
-    // if (!Array.isArray(events) || events.length === 0) {
-    //   console.warn("⚠️ No valid structured events found, using text fallback.");
-    //   events = [
-    //     {
-    //       id: "perplexity-1",
-    //       title: `Events related to "${originalQuery}"`,
-    //       description: content.slice(0, 400).replace(/```json|```|\[|\]/g, "").trim(),
-    //       start_date: null,
-    //       end_date: null,
-    //       suburb: null,
-    //       state: null,
-    //       postcode: null,
-    //       latitude: null,
-    //       longitude: null,
-    //       category: ["Community Event"],
-    //       website: null,
-    //       source: "perplexity",
-    //       similarity: 0,
-    //       distance_km: null
-    //     }
-    //   ];
-    // }
-
-  
-
+    // ==============================
+    // FILTER AUSTRALIA-ONLY EVENTS
+    // ==============================
+    if (Array.isArray(events) && events.length > 0) {
+      const beforeFilter = events.length;
+      events = events.filter(isEventInAustralia);
+      if (beforeFilter > events.length) {
+        console.log(`🌏 Filtered out ${beforeFilter - events.length} non-Australian events from Perplexity response`);
+      }
+    }
 
     if (!Array.isArray(events) || events.length === 0) {
       console.warn("⚠️ No valid structured events found, returning NOT FOUND response.");
@@ -612,9 +818,15 @@ function parsePerplexityResponse(content, originalQuery, startDate) {
     // FORMAT & NORMALIZE
     // ==============================
     const formattedEvents = events.map((event, index) => {
+      // Extract location from nested objects OR top-level event properties
       const loc = parseLocation(event.location || event.address || event.place);
-
-
+      
+      // Override with top-level properties if they exist (Perplexity sometimes puts them at top level)
+      const finalSuburb = event.suburb || event.city || loc.suburb;
+      const finalState = event.state || loc.state;
+      const finalPostcode = event.postcode || event.postal_code || loc.postcode;
+      const finalLatitude = event.latitude || event.lat || loc.latitude;
+      const finalLongitude = event.longitude || event.lng || event.lon || loc.longitude;
 
       // Detect categories first
       const categories = detectCategories([
@@ -630,8 +842,8 @@ function parsePerplexityResponse(content, originalQuery, startDate) {
 
       const deterministicId = event.id || generateDeterministicEventId({
         ...event,
-        suburb: loc.suburb,
-        state: loc.state
+        suburb: finalSuburb,
+        state: finalState
       }, index);
 
       return {
@@ -640,11 +852,11 @@ function parsePerplexityResponse(content, originalQuery, startDate) {
         description: event.description?.trim() || "",
         start_date: event.start_date || event.date || null,
         end_date: event.end_date || null,
-        suburb: loc.suburb,
-        state: loc.state,
-        postcode: loc.postcode,
-        latitude: loc.latitude,
-        longitude: loc.longitude,
+        suburb: finalSuburb,
+        state: finalState,
+        postcode: finalPostcode,
+        latitude: finalLatitude,
+        longitude: finalLongitude,
         category: categories,
         image_url: imageUrl,
         website: event.website || event.url || null,
@@ -655,20 +867,22 @@ function parsePerplexityResponse(content, originalQuery, startDate) {
     });
 
     // ==============================
-    // FILTER UPCOMING EVENTS
-
-
+    // FILTER UPCOMING EVENTS & FINAL AUSTRALIA CHECK
+    // ==============================
     const upcoming = formattedEvents.filter(ev => {
+      // Final safety check using shared function
+      if (!isEventInAustralia(ev)) return false;
+      
+      // Date filter
       if (!ev.start_date) return true;
       try {
         const eventDate = new Date(ev.start_date);
-        // Keep if valid date and upcoming, OR if date is invalid (give benefit of doubt)
         return isNaN(eventDate.getTime()) || eventDate >= filterDate;
       } catch {
-        return true; // Keep unparseable dates rather than rejecting
+        return true;
       }
-
     });
+    
     console.log(`✅ Parsed ${upcoming.length} upcoming events from Perplexity`);
     return upcoming;
   } catch (err) {
@@ -1302,8 +1516,8 @@ exports.semanticSearch = async (req, res) => {
 
       // Handle Perplexity results (could be array, null, or error object)
       if (perplexityResults && Array.isArray(perplexityResults) && perplexityResults.length > 0) {
-        // Success: Perplexity returned valid events
-        console.log(`✅ Perplexity returned ${perplexityResults.length} results`);
+        // Results are already filtered in parsePerplexityResponse
+        console.log(`✅ Perplexity returned ${perplexityResults.length} Australian events`);
         await persistPerplexityEvents(perplexityResults);
         return res.json({
           status: true,
@@ -1338,7 +1552,7 @@ exports.semanticSearch = async (req, res) => {
           // Perplexity timed out/failed AND database has no results
           return res.status(404).json({
             error: 'No upcoming events found',
-            status: false,
+            statusCode: 404,
             message: 'No upcoming events match your search. Try different keywords or check back later for new events.'
           });
         }
@@ -1348,7 +1562,7 @@ exports.semanticSearch = async (req, res) => {
       // No database results and no Perplexity search was initiated (no query provided)
       return res.status(404).json({
         error: 'No upcoming events found',
-        status: false,
+        statusCode: 404,
         message: 'No upcoming events match your search. Try different keywords or check back later for new events.'
       });
     }
@@ -1374,11 +1588,19 @@ exports.semanticSearch = async (req, res) => {
       }
     }
 
+    // Filter out non-Australian events from database results
+    const beforeDbFilter = finalResults.length;
+    finalResults = finalResults.filter(isEventInAustralia);
+    
+    if (beforeDbFilter > finalResults.length) {
+      console.log(`🌏 Filtered out ${beforeDbFilter - finalResults.length} non-Australian events from database results`);
+    }
+
     // Final safety check: if we still have no results, return 404
     if (finalResults.length === 0) {
       return res.status(404).json({
         error: 'No upcoming events found',
-        status: false,
+        statusCode: 404,
         message: 'No upcoming events match your search. Try different keywords or check back later for new events.'
       });
     }

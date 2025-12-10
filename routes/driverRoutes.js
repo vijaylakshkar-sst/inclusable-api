@@ -28,4 +28,9 @@ router.get('/history', auth, driverController.getHistory);
 router.put('/location', auth, driverController.updateLocation);
 router.get('/bookings', auth, driverController.getBookings);
 
+router.get("/makes", auth, driverController.getMakes);
+router.get("/models/:make_id", auth, driverController.getModelsByMake);
+router.get("/disability-features", auth, driverController.getDisabilityFeaturs);
+router.get("/vehicle-types", auth, driverController.getVehicleTypes);
+
 module.exports = router;
