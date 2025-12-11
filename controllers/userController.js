@@ -208,8 +208,8 @@ exports.register = async (req, res) => {
     });
 
   } catch (err) {
-    console.error('Registration error:', err);
-    res.status(500).json({ error: 'Internal server error.' });
+    console.error('Registration error:', err.message);
+    res.status(500).json({error: err.message});
   }
 };
 
@@ -511,108 +511,129 @@ exports.addAdditionalDetails = async (req, res) => {
 
 exports.login = async (req, res) => {
 
-  const { email, password,fcm_token } = req.body;
-  
+  const { email, password, fcm_token } = req.body;
   const client = await pool.connect();
-  
+
   // New comprehensive validation
   if (!email || !password) {
     return res.status(400).json({ error: 'Email and password are required.' });
   }
-  
+
   // Validate email
   const emailValidation = validateEmail(email);
   if (!emailValidation.isValid) {
     return res.status(400).json({ error: emailValidation.error });
   }
-  
+
   // Validate password (basic check for login)
   if (password.length < 1) {
     return res.status(400).json({ error: 'Password is required.' });
   }
-  try {
-   const userResData = await pool.query(
-    'SELECT * FROM users WHERE email = $1 AND deleted_at IS NULL',
-    [email]
-  );
 
-  if (userResData.rows.length === 0) {
-    return res.status(404).json({ error: 'User not found or deleted.' });
-  }
+  try {
+    const userResData = await client.query(
+      'SELECT * FROM users WHERE email = $1 AND deleted_at IS NULL',
+      [email]
+    );
+
+    if (userResData.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found or deleted.' });
+    }
+
     const user = userResData.rows[0];
+
     if (!user.is_verified) {
       return res.status(403).json({ error: 'Email not verified.' });
     }
+
     const match = await bcrypt.compare(password, user.password);
     if (!match) {
       return res.status(401).json({ error: 'Invalid credentials.' });
     }
-    // Issue JWT
-    const token = jwt.sign({ userId: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
-    // res.json({ token });
 
-      // ✅ Update FCM token if provided
+    // Issue JWT
+    const token = jwt.sign(
+      { userId: user.id, email: user.email, role: user.role },
+      JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
+    // Update FCM token if provided
     if (fcm_token && fcm_token.trim() !== '') {
-      await pool.query('UPDATE users SET fcm_token = $1 WHERE id = $2', [fcm_token, user.id]);
+      await client.query(
+        'UPDATE users SET fcm_token = $1 WHERE id = $2',
+        [fcm_token, user.id]
+      );
       console.log(`✅ FCM token updated for user ID: ${user.id}`);
     }
-
 
     const userId = user.id;
 
     // Check skips
-    const skipRes = await pool.query(
+    const skipRes = await client.query(
       'SELECT step_name FROM user_onboarding_skips WHERE user_id = $1',
       [userId]
     );
     const skipped = skipRes.rows.map(r => r.step_name);
 
-    // Check additional details (profile_image, date_of_birth, gender)
-    const userRes = await pool.query(
+    // Check additional details
+    const userRes = await client.query(
       'SELECT profile_image, date_of_birth, gender FROM users WHERE id = $1',
       [userId]
     );
     let has_completed_additional_details = false;
     if (userRes.rows.length > 0) {
-      const user = userRes.rows[0];
-      has_completed_additional_details = !!(user.profile_image && user.date_of_birth && user.gender);
+      const u = userRes.rows[0];
+      has_completed_additional_details = !!(u.profile_image && u.date_of_birth && u.gender);
     }
-    if (skipped.includes('additional_details')) has_completed_additional_details = true;
+    if (skipped.includes('additional_details'))
+      has_completed_additional_details = true;
 
     // Check location & accessibility
-    const locRes = await pool.query(
+    const locRes = await client.query(
       'SELECT id FROM location_accessibility WHERE user_id = $1',
       [userId]
     );
     let has_completed_location_accessibility = locRes.rows.length > 0;
-    if (skipped.includes('location_accessibility')) has_completed_location_accessibility = true;
+    if (skipped.includes('location_accessibility'))
+      has_completed_location_accessibility = true;
 
     // Check NDIS information
-    const ndisRes = await pool.query(
+    const ndisRes = await client.query(
       'SELECT id FROM ndis_information WHERE user_id = $1',
       [userId]
     );
     let has_completed_ndis_information = ndisRes.rows.length > 0;
-    if (skipped.includes('ndis_information')) has_completed_ndis_information = true;
+    if (skipped.includes('ndis_information'))
+      has_completed_ndis_information = true;
 
-
-    const businessRes = await pool.query(
-      'SELECT business_name, business_category, business_email, business_phone_number, abn_number,year_experience FROM users WHERE id = $1',
+    // Business details
+    const businessRes = await client.query(
+      'SELECT business_name, business_category, business_email, business_phone_number, abn_number, year_experience FROM users WHERE id = $1',
       [userId]
     );
+
     let has_completed_business_details = false;
     if (businessRes.rows.length > 0) {
-      const user = businessRes.rows[0];
-      has_completed_business_details = !!(user.business_name && user.business_category && user.business_email && user.business_phone_number && user.abn_number && user.year_experience);
+      const b = businessRes.rows[0];
+      has_completed_business_details = !!(
+        b.business_name &&
+        b.business_category &&
+        b.business_email &&
+        b.business_phone_number &&
+        b.abn_number &&
+        b.year_experience
+      );
     }
-    if (skipped.includes('business_details')) has_completed_business_details = true;
-    
+    if (skipped.includes('business_details'))
+      has_completed_business_details = true;
+
     const skipData = {
-        has_completed_additional_details,
-        has_completed_location_accessibility,
-        has_completed_ndis_information,
-        has_completed_business_details,
-    }
+      has_completed_additional_details,
+      has_completed_location_accessibility,
+      has_completed_ndis_information,
+      has_completed_business_details
+    };
 
     // Base user object
     const userData = {
@@ -622,75 +643,263 @@ exports.login = async (req, res) => {
       phone_number: user.phone_number,
       role: user.role,
       is_verified: user.is_verified,
-      profile_image_url: user.profile_image
-        ? `${BASE_IMAGE_URL}/${user.profile_image}`
-        : null,
+      profile_image_url: user.profile_image ? `${BASE_IMAGE_URL}/${user.profile_image}` : null,
       profile_image: user.profile_image,
       date_of_birth: user.date_of_birth,
       gender: user.gender,
-      stripe_account_status: user.stripe_account_status === '3' ? "Active" :  user.stripe_account_status === '2' ? "Under Review": "Pending",
+      stripe_account_status:
+        user.stripe_account_status === '3'
+          ? 'Active'
+          : user.stripe_account_status === '2'
+          ? 'Under Review'
+          : 'Pending',
       created_at: user.created_at,
       updated_at: user.updated_at,
-      fcm_token: fcm_token
+      fcm_token
     };
 
-    // ✅ If company, add business details
+    // Add company business details
     if (user.role === 'Company') {
       const querySubscription = `
-      SELECT 
-        us.subscription_status,
-        us.expiry_date,
-        sp.id AS plan_id,
-        sp.name AS plan_name,
-        sp.plan_type,
-        sp.price,
-        sp.currency,
-        sp.description,
-        sp.features,
-        sp.duration,
-        sp.trial_days,
-        sp.audience_role,
-        sp.is_active,
-        sp.icon
-      FROM user_subscriptions us
-      JOIN subscription_plans sp ON us.plan_id = sp.id
-      WHERE us.user_id = $1
-      ORDER BY us.updated_at DESC
-      LIMIT 1;
-    `;
-    const resultSubscription = await client.query(querySubscription, [userId]);
-
+        SELECT 
+          us.subscription_status,
+          us.expiry_date,
+          sp.id AS plan_id,
+          sp.name AS plan_name,
+          sp.plan_type,
+          sp.price,
+          sp.currency,
+          sp.description,
+          sp.features,
+          sp.duration,
+          sp.trial_days,
+          sp.audience_role,
+          sp.is_active,
+          sp.icon
+        FROM user_subscriptions us
+        JOIN subscription_plans sp ON us.plan_id = sp.id
+        WHERE us.user_id = $1
+        ORDER BY us.updated_at DESC
+        LIMIT 1;
+      `;
+      const resultSubscription = await client.query(querySubscription, [userId]);
 
       userData.business_details = {
         business_name: user.business_name,
         business_category: user.business_category,
         business_email: user.business_email,
         business_phone_number: user.business_phone_number,
-        business_logo: user.business_logo
-          ? `${BASE_IMAGE_URL}/${user.business_logo}`
-          : null,
+        business_logo: user.business_logo ? `${BASE_IMAGE_URL}/${user.business_logo}` : null,
         abn_number: user.abn_number,
         ndis_registration_number: user.ndis_registration_number,
         website_url: user.website_url,
         year_experience: user.year_experience,
         address: user.address,
         business_overview: user.business_overview,
-        subscription_status: resultSubscription.rows.length > 0 ? true : false,
+        subscription_status: resultSubscription.rows.length > 0
       };
     }
 
-    res.json({
+    return res.json({
       status: true,
       message: 'Login successful.',
       token,
-      data: {skipData,user:userData} ,
-      
+      data: { skipData, user: userData }
     });
+
   } catch (err) {
     console.error('Login error:', err.message);
     res.status(500).json({ error: 'Internal server error.' });
+  } finally {
+    client.release();
   }
 };
+
+
+
+// exports.login = async (req, res) => {
+
+//   const { email, password,fcm_token } = req.body;
+  
+//   const client = await pool.connect();
+  
+//   // New comprehensive validation
+//   if (!email || !password) {
+//     return res.status(400).json({ error: 'Email and password are required.' });
+//   }
+  
+//   // Validate email
+//   const emailValidation = validateEmail(email);
+//   if (!emailValidation.isValid) {
+//     return res.status(400).json({ error: emailValidation.error });
+//   }
+  
+//   // Validate password (basic check for login)
+//   if (password.length < 1) {
+//     return res.status(400).json({ error: 'Password is required.' });
+//   }
+//   try {
+//    const userResData = await pool.query(
+//     'SELECT * FROM users WHERE email = $1 AND deleted_at IS NULL',
+//     [email]
+//   );
+
+//   if (userResData.rows.length === 0) {
+//     return res.status(404).json({ error: 'User not found or deleted.' });
+//   }
+//     const user = userResData.rows[0];
+//     if (!user.is_verified) {
+//       return res.status(403).json({ error: 'Email not verified.' });
+//     }
+//     const match = await bcrypt.compare(password, user.password);
+//     if (!match) {
+//       return res.status(401).json({ error: 'Invalid credentials.' });
+//     }
+//     // Issue JWT
+//     const token = jwt.sign({ userId: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+//     // res.json({ token });
+
+//       // ✅ Update FCM token if provided
+//     if (fcm_token && fcm_token.trim() !== '') {
+//       await pool.query('UPDATE users SET fcm_token = $1 WHERE id = $2', [fcm_token, user.id]);
+//       console.log(`✅ FCM token updated for user ID: ${user.id}`);
+//     }
+
+
+//     const userId = user.id;
+
+//     // Check skips
+//     const skipRes = await pool.query(
+//       'SELECT step_name FROM user_onboarding_skips WHERE user_id = $1',
+//       [userId]
+//     );
+//     const skipped = skipRes.rows.map(r => r.step_name);
+
+//     // Check additional details (profile_image, date_of_birth, gender)
+//     const userRes = await pool.query(
+//       'SELECT profile_image, date_of_birth, gender FROM users WHERE id = $1',
+//       [userId]
+//     );
+//     let has_completed_additional_details = false;
+//     if (userRes.rows.length > 0) {
+//       const user = userRes.rows[0];
+//       has_completed_additional_details = !!(user.profile_image && user.date_of_birth && user.gender);
+//     }
+//     if (skipped.includes('additional_details')) has_completed_additional_details = true;
+
+//     // Check location & accessibility
+//     const locRes = await pool.query(
+//       'SELECT id FROM location_accessibility WHERE user_id = $1',
+//       [userId]
+//     );
+//     let has_completed_location_accessibility = locRes.rows.length > 0;
+//     if (skipped.includes('location_accessibility')) has_completed_location_accessibility = true;
+
+//     // Check NDIS information
+//     const ndisRes = await pool.query(
+//       'SELECT id FROM ndis_information WHERE user_id = $1',
+//       [userId]
+//     );
+//     let has_completed_ndis_information = ndisRes.rows.length > 0;
+//     if (skipped.includes('ndis_information')) has_completed_ndis_information = true;
+
+
+//     const businessRes = await pool.query(
+//       'SELECT business_name, business_category, business_email, business_phone_number, abn_number,year_experience FROM users WHERE id = $1',
+//       [userId]
+//     );
+//     let has_completed_business_details = false;
+//     if (businessRes.rows.length > 0) {
+//       const user = businessRes.rows[0];
+//       has_completed_business_details = !!(user.business_name && user.business_category && user.business_email && user.business_phone_number && user.abn_number && user.year_experience);
+//     }
+//     if (skipped.includes('business_details')) has_completed_business_details = true;
+    
+//     const skipData = {
+//         has_completed_additional_details,
+//         has_completed_location_accessibility,
+//         has_completed_ndis_information,
+//         has_completed_business_details,
+//     }
+
+//     // Base user object
+//     const userData = {
+//       id: user.id,
+//       full_name: user.full_name,
+//       email: user.email,
+//       phone_number: user.phone_number,
+//       role: user.role,
+//       is_verified: user.is_verified,
+//       profile_image_url: user.profile_image
+//         ? `${BASE_IMAGE_URL}/${user.profile_image}`
+//         : null,
+//       profile_image: user.profile_image,
+//       date_of_birth: user.date_of_birth,
+//       gender: user.gender,
+//       stripe_account_status: user.stripe_account_status === '3' ? "Active" :  user.stripe_account_status === '2' ? "Under Review": "Pending",
+//       created_at: user.created_at,
+//       updated_at: user.updated_at,
+//       fcm_token: fcm_token
+//     };
+
+//     // ✅ If company, add business details
+//     if (user.role === 'Company') {
+//       const querySubscription = `
+//       SELECT 
+//         us.subscription_status,
+//         us.expiry_date,
+//         sp.id AS plan_id,
+//         sp.name AS plan_name,
+//         sp.plan_type,
+//         sp.price,
+//         sp.currency,
+//         sp.description,
+//         sp.features,
+//         sp.duration,
+//         sp.trial_days,
+//         sp.audience_role,
+//         sp.is_active,
+//         sp.icon
+//       FROM user_subscriptions us
+//       JOIN subscription_plans sp ON us.plan_id = sp.id
+//       WHERE us.user_id = $1
+//       ORDER BY us.updated_at DESC
+//       LIMIT 1;
+//     `;
+//     const resultSubscription = await client.query(querySubscription, [userId]);
+
+
+//       userData.business_details = {
+//         business_name: user.business_name,
+//         business_category: user.business_category,
+//         business_email: user.business_email,
+//         business_phone_number: user.business_phone_number,
+//         business_logo: user.business_logo
+//           ? `${BASE_IMAGE_URL}/${user.business_logo}`
+//           : null,
+//         abn_number: user.abn_number,
+//         ndis_registration_number: user.ndis_registration_number,
+//         website_url: user.website_url,
+//         year_experience: user.year_experience,
+//         address: user.address,
+//         business_overview: user.business_overview,
+//         subscription_status: resultSubscription.rows.length > 0 ? true : false,
+//       };
+//     }
+
+//     res.json({
+//       status: true,
+//       message: 'Login successful.',
+//       token,
+//       data: {skipData,user:userData} ,
+      
+//     });
+//   } catch (err) {
+//     console.error('Login error:', err.message);
+//     res.status(500).json({ error: 'Internal server error.' });
+//   }
+// };
+
 
 // Update onboarding status check to include skips
 exports.checkOnboardingCompletion = async (req, res) => {
