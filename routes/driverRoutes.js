@@ -3,13 +3,14 @@ const router = express.Router();
 const driverController = require('../controllers/driverController');
 const userController = require('../controllers/userController');
 const auth = require('../middleware/auth');
-const uploadFiles = require('../middleware/driverDocumentsMulter');
+const uploadFiles = require('../middleware/profileMulter');
+const driverDocumentMulter = require('../middleware/driverDocumentsMulter');
 
 router.post('/cab-register', uploadFiles, userController.registerCabOwner);
 
-router.post('/profile/add',auth, uploadFiles, driverController.addProfile);
+router.post('/profile/add',auth, driverDocumentMulter, driverController.addProfile);
 router.get('/profile', auth, driverController.getProfile);
-router.put('/profile/update', auth, uploadFiles, driverController.updateProfile);
+router.put('/profile/update', auth, driverDocumentMulter, driverController.updateProfile);
 
 router.put('/status', auth, driverController.updateStatus);
 

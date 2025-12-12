@@ -1744,7 +1744,8 @@ const generateOTP = () => Math.floor(1000 + Math.random() * 9000);
 exports.registerCabOwner = async (req, res) => {
   try {
     const { full_name, email, password, phone_number, date_of_birth, address } = req.body;
-    const profile_image = null;
+
+    let profile_image = null;
 
     if (req.files) {
       if (req.files["profile_image"]?.[0]) {
