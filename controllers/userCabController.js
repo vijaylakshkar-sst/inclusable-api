@@ -18,8 +18,7 @@ exports.findAvailableRides = async (req, res) => {
         d.*,
         c.name AS cab_type_name,
         c.thumbnail_url,
-        c.fare_per_km,
-        c.seating_capacity,
+        c.standard_price,
         (
           6371 * acos(
             cos(radians($1)) * cos(radians(d.current_lat)) *
@@ -67,6 +66,110 @@ exports.findAvailableRides = async (req, res) => {
 };
 
 
+exports.findCabTypesWithFare = async (req, res) => {
+  const {
+    pickup_lat,
+    pickup_lng,
+    drop_lat,
+    drop_lng,
+  } = req.query;
+
+  if (!pickup_lat || !pickup_lng || !drop_lat || !drop_lng) {
+    return res.status(400).json({
+      status: false,
+      message: "Pickup and drop latitude & longitude are required",
+    });
+  }
+
+  try {
+    const client = await pool.connect();
+
+    const query = `
+      SELECT
+        c.id,
+        c.name,
+        c.thumbnail_url,
+        c.standard_price,
+        c.disability_feature_price,
+
+        (
+          6371 * acos(
+            cos(radians($1)) * cos(radians($3)) *
+            cos(radians($4) - radians($2)) +
+            sin(radians($1)) * sin(radians($3))
+          )
+        ) AS distance_km
+
+      FROM cab_types c
+      WHERE c.is_active = true;
+    `;
+
+    const result = await client.query(query, [
+      pickup_lat,
+      pickup_lng,
+      drop_lat,
+      drop_lng,
+    ]);
+
+    client.release();
+
+    // 🔥 Transform response into two groups
+    const standard_cabs = [];
+    const disability_cabs = [];
+
+    result.rows.forEach(cab => {
+      const fullThumbnail =
+        cab.thumbnail_url
+          ? `${BASE_IMAGE_URL}/${cab.thumbnail_url}`
+          : null;
+
+      const distance = Number(cab.distance_km);
+
+      // Standard cab pricing
+      if (cab.standard_price) {
+        standard_cabs.push({
+          id: cab.id,
+          name: cab.name,
+          thumbnail_url: fullThumbnail,
+          price_per_km: cab.standard_price,
+          distance_km: distance,
+          total_price: Math.round(distance * cab.standard_price),
+        });
+      }
+
+      // Disability cab pricing
+      if (cab.disability_feature_price) {
+        disability_cabs.push({
+          id: cab.id,
+          name: cab.name,
+          thumbnail_url: fullThumbnail,
+          price_per_km: cab.disability_feature_price,
+          distance_km: distance,
+          total_price: Math.round(distance * cab.disability_feature_price),
+        });
+      }
+    });
+
+    // Sort by price (cheap → costly)
+    standard_cabs.sort((a, b) => a.total_price - b.total_price);
+    disability_cabs.sort((a, b) => a.total_price - b.total_price);
+
+    res.status(200).json({
+      status: true,
+      message: "Cab types fetched successfully",
+      data: {
+        standard_cabs,
+        disability_cabs,
+      },
+    });
+
+  } catch (err) {
+    console.error("❌ CAB FARE ERROR:", err.message);
+    res.status(500).json({ status: false, message: "Server Error" });
+  }
+};
+
+
 exports.bookCab = async (req, res) => {
 
   const user_id = req.user?.userId;
@@ -80,6 +183,7 @@ exports.bookCab = async (req, res) => {
     drop_address,
     drop_lat,
     drop_lng,
+    disability_features_id,
     scheduled_time
   } = req.body;
 
@@ -135,40 +239,65 @@ exports.bookCab = async (req, res) => {
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     const distance_km = parseFloat((R * c).toFixed(2));
 
-    const estimated_fare = parseFloat((cabType.base_fare || 0 + distance_km * cabType.fare_per_km).toFixed(2));
+    const estimated_fare = parseFloat((cabType.base_fare || 0 + distance_km * cabType.standard_price).toFixed(2));
 
     let driverId = null;
 
     // ✅ Assign driver only if booking_type = instant
     if (booking_type === 'instant') {
-      const driverQuery = `
-        SELECT id,
+
+      let driverQuery = `
+        SELECT d.id,
           (
             6371 * acos(
-              cos(radians($1)) * cos(radians(current_lat)) *
-              cos(radians(current_lng) - radians($2)) +
-              sin(radians($1)) * sin(radians(current_lat))
+              cos(radians($1)) * cos(radians(d.current_lat)) *
+              cos(radians(d.current_lng) - radians($2)) +
+              sin(radians($1)) * sin(radians(d.current_lat))
             )
           ) AS distance_km
-        FROM drivers
-        WHERE is_available = true AND status = 'online' AND cab_type_id = $3
+        FROM drivers d
+      `;
+
+      const params = [pickup_lat, pickup_lng, cab_type_id];
+      let paramIndex = 4;
+
+      // ✅ Join only if disability feature is selected
+      if (disability_features_id) {
+        driverQuery += `
+          INNER JOIN driver_disability_features ddf
+            ON ddf.driver_id = d.id
+          AND ddf.disability_feature_id = $${paramIndex}
+        `;
+        params.push(disability_features_id);
+        paramIndex++;
+      }
+
+      driverQuery += `
+        WHERE d.is_available = true
+          AND d.status = 'online'
+          AND d.cab_type_id = $3
         ORDER BY distance_km ASC
         LIMIT 1;
       `;
 
-      const driverRes = await client.query(driverQuery, [pickup_lat, pickup_lng, cab_type_id]);
+      const driverRes = await client.query(driverQuery, params);
 
       if (driverRes.rows.length === 0) {
         return res.status(404).json({
           status: false,
-          message: 'No nearby drivers available for this cab type',
+          message: disability_features_id
+            ? 'No nearby drivers available with selected disability feature'
+            : 'No nearby drivers available for this cab type',
         });
       }
 
       driverId = driverRes.rows[0].id;
 
-      // Mark driver unavailable
-      await client.query('UPDATE drivers SET is_available = false WHERE id = $1', [driverId]);
+      // 🔒 Make driver unavailable
+      await client.query(
+        'UPDATE drivers SET is_available = false WHERE id = $1',
+        [driverId]
+      );
     }
 
     const booking_otp = Math.floor(1000 + Math.random() * 9000);
@@ -179,9 +308,10 @@ exports.bookCab = async (req, res) => {
         user_id, driver_id, cab_type_id, booking_type,
         pickup_address, pickup_lat, pickup_lng,
         drop_address, drop_lat, drop_lng,
-        scheduled_time, distance_km, estimated_fare, status,booking_mode,booking_otp
+        scheduled_time, distance_km, estimated_fare, status,
+        booking_mode, booking_otp, disability_features_id
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
       RETURNING *;
       `,
       [
@@ -200,23 +330,24 @@ exports.bookCab = async (req, res) => {
         estimated_fare,
         booking_type === 'instant' ? 'pending' : 'scheduled',
         booking_mode,
-        booking_otp
+        booking_otp,
+        disability_features_id || null
       ]
     );
 
-    const booking = result.rows[0];    
+    const booking = result.rows[0];
 
-     const driverResult = await client.query(
-          'SELECT id,user_id FROM drivers WHERE id = $1 LIMIT 1',
-          [driverId]
-      );
+    const driverResult = await client.query(
+      'SELECT id,user_id FROM drivers WHERE id = $1 LIMIT 1',
+      [driverId]
+    );
 
-      if (driverResult.rowCount === 0) {
-          return res.status(404).json({
-              status: false,
-              message: 'Driver not found for this user'
-          });
-      }
+    if (driverResult.rowCount === 0) {
+      return res.status(404).json({
+        status: false,
+        message: 'Driver not found for this user'
+      });
+    }
 
     const driver_user_id = driverResult.rows[0].user_id;
 
@@ -278,24 +409,24 @@ exports.cancelBooking = async (req, res) => {
       await client.query('UPDATE drivers SET is_available = true WHERE id = $1', [booking.driver_id]);
     }
 
-    const driverId = booking.driver_id;    
+    const driverId = booking.driver_id;
 
     const driverResult = await client.query(
-          'SELECT id,user_id FROM drivers WHERE id = $1 LIMIT 1',
-          [driverId]
-      );
+      'SELECT id,user_id FROM drivers WHERE id = $1 LIMIT 1',
+      [driverId]
+    );
 
-      if (driverResult.rowCount === 0) {
-          return res.status(404).json({
-              status: false,
-              message: 'Driver not found for this user'
-          });
-      }
+    if (driverResult.rowCount === 0) {
+      return res.status(404).json({
+        status: false,
+        message: 'Driver not found for this user'
+      });
+    }
 
     const driver_user_id = driverResult.rows[0].user_id;
 
- 
-    if (driverId) {      
+
+    if (driverId) {
       await sendNotificationToDriver({
         driverUserId: driver_user_id,
         title: 'Booking Cancelled',
@@ -306,9 +437,9 @@ exports.cancelBooking = async (req, res) => {
         bg_color: '#DF1D17',
         data: {
           screen: 'BookingDetails',
-          sound: 'default',          
+          sound: 'default',
         }
-      });   
+      });
     }
 
     res.status(200).json({ status: true, message: 'Booking cancelled successfully' });

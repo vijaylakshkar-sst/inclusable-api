@@ -11,7 +11,7 @@ router.post('/cab-register', uploadFiles, userController.registerCabOwner);
 router.post('/profile/add',auth, driverDocumentMulter, driverController.addProfile);
 router.get('/profile', auth, driverController.getProfile);
 router.put('/profile/update', auth, driverDocumentMulter, driverController.updateProfile);
-
+router.get('/dashboard', auth, driverController.getDashboard);
 router.put('/status', auth, driverController.updateStatus);
 
 // Accept booking

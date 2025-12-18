@@ -119,76 +119,124 @@ exports.addProfile = async (req, res) => {
 //  GET /cab-profile/:id
 // ===========================================================
 exports.getProfile = async (req, res) => {
-    const user_id = req.user?.userId;
-    if (!user_id) {
-        return res.status(401).json({ status: false, error: 'Unauthorized' });
-    }
+  const user_id = req.user?.userId;
 
-    try {
-        // Get base URL from request (auto works on local + prod)   
+  if (!user_id) {
+    return res.status(401).json({ status: false, error: 'Unauthorized' });
+  }
 
-        // 🔹 Step 1: Fetch main driver profile with make/model names
-        const driverQuery = `
+  try {
+    // 🔹 Step 1: Fetch user basic details
+    const userQuery = `
       SELECT 
-        d.*,
-        vm.name AS vehicle_model_name,
-        mk.name AS vehicle_make_name
-      FROM drivers d
-      LEFT JOIN vehicle_models vm ON d.vehicle_model_id = vm.id
-      LEFT JOIN vehicle_makes mk ON d.vehicle_make_id = mk.id
-      WHERE d.user_id = $1
+        id,
+        full_name,
+        email,
+        phone_number,
+        role,
+        is_verified,
+        profile_image,
+        date_of_birth,
+        gender,
+        stripe_account_status,
+        created_at,
+        updated_at
+      FROM users
+      WHERE id = $1 AND deleted_at IS NULL
       LIMIT 1;
     `;
+    const userResult = await pool.query(userQuery, [user_id]);
 
-        const driverResult = await pool.query(driverQuery, [user_id]);
+    if (userResult.rowCount === 0) {
+      return res.status(404).json({
+        status: false,
+        message: 'User not found'
+      });
+    }
 
-        if (driverResult.rowCount === 0) {
-            return res.status(404).json({
-                status: false,
-                message: 'Driver not found'
-            });
-        }
+    const user = userResult.rows[0];
 
+    const userData = {
+      ...user,
+      profile_image_url: user.profile_image
+        ? `${BASE_IMAGE_URL}/${user.profile_image}`
+        : null,
+      stripe_account_status:
+        user.stripe_account_status === '3'
+          ? 'Active'
+          : user.stripe_account_status === '2'
+            ? 'Under Review'
+            : 'Pending'
+    };
+
+    // 🔹 Step 2: Fetch driver profile ONLY for Cab Owner
+    if (user.role === 'Cab Owner') {
+      const driverQuery = `
+        SELECT 
+          d.*,
+          vm.name AS vehicle_model_name,
+          mk.name AS vehicle_make_name
+        FROM drivers d
+        LEFT JOIN vehicle_models vm ON d.vehicle_model_id = vm.id
+        LEFT JOIN vehicle_makes mk ON d.vehicle_make_id = mk.id
+        WHERE d.user_id = $1
+        LIMIT 1;
+      `;
+
+      const driverResult = await pool.query(driverQuery, [user_id]);
+
+      if (driverResult.rowCount > 0) {
         const driver = driverResult.rows[0];
 
-        // 🔹 Step 2: Fetch disability features for this driver
+        // 🔹 Step 3: Disability features
         const featuresQuery = `
-      SELECT df.id, df.name
-      FROM driver_disability_features ddf
-      JOIN disability_features df ON ddf.disability_feature_id = df.id
-      WHERE ddf.driver_id = $1;
-    `;
+          SELECT df.id, df.name
+          FROM driver_disability_features ddf
+          JOIN disability_features df ON ddf.disability_feature_id = df.id
+          WHERE ddf.driver_id = $1;
+        `;
         const featuresResult = await pool.query(featuresQuery, [driver.id]);
 
         driver.disability_features = featuresResult.rows;
 
-        // 🔹 Step 3: Attach full URLs for image fields
+        // 🔹 Step 4: Attach image URLs
         const fileFields = [
-            'license_photo_front',
-            'license_photo_back',
-            'rc_copy',
-            'insurance_copy',
-            'police_check_certificate',
-            'wwvp_card'
+          'license_photo_front',
+          'license_photo_back',
+          'rc_copy',
+          'insurance_copy',
+          'police_check_certificate',
+          'wwvp_card'
         ];
 
-        fileFields.forEach((field) => {
-            if (driver[field]) {
-                // remove leading slash if needed
-                const cleanPath = driver[field].replace(/^\/+/, '');
-                driver[field] = `${BASE_IMAGE_URL}/${cleanPath}`;
-            }
+        fileFields.forEach(field => {
+          if (driver[field]) {
+            const cleanPath = driver[field].replace(/^\/+/, '');
+            driver[field] = `${BASE_IMAGE_URL}/${cleanPath}`;
+          }
         });
 
-        // 🔹 Step 4: Send response
-        res.json({
-            status: true,
-            data: driver
-        });
-    } catch (err) {
-        console.error('❌ Error fetching driver profile:', err.message);
-        res.status(500).json({ status: false, message: err.message });
+        userData.driver_details = driver;
+      } else {
+        userData.driver_details = null;
+      }
     }
+
+    // 🔹 Step 5: Send response
+    return res.json({
+      status: true,
+      data: {
+        user: userData
+      }
+    });
+
+  } catch (err) {
+    console.error('❌ Error fetching profile:', err.message);
+    return res.status(500).json({
+      status: false,
+      message: 'Internal server error'
+    });
+  }
 };
 
 // ===========================================================
@@ -1121,5 +1169,88 @@ exports.getVehicleTypes = async (req, res) => {
     res.json({ status: true, data: result.rows });
   } catch (err) {
     res.status(500).json({ status: false, message: err.message });
+  }
+};
+
+
+exports.getDashboard = async (req, res) => {
+  const user_id = req.user.userId;
+
+  try {
+    // 🔹 Get driver
+    const driverRes = await pool.query(
+      `SELECT id FROM drivers WHERE user_id = $1 LIMIT 1`,
+      [user_id]
+    );
+
+    if (!driverRes.rowCount) {
+      return res.status(404).json({ status: false, message: "Driver not found" });
+    }
+
+    const driver_id = driverRes.rows[0].id;
+
+    // 🔹 Parallel queries
+    const [
+      jobs,
+      distance,
+      earnings,
+      hours
+    ] = await Promise.all([
+
+      pool.query(`
+        SELECT COUNT(*) FROM cab_bookings
+        WHERE driver_id = $1
+          AND status = 'completed'
+          AND DATE(updated_at) = CURRENT_DATE
+      `, [driver_id]),
+
+      pool.query(`
+        SELECT COALESCE(SUM(distance_km),0) FROM cab_bookings
+        WHERE driver_id = $1
+          AND status = 'completed'
+          AND DATE(updated_at) = CURRENT_DATE
+      `, [driver_id]),
+
+      pool.query(`
+        SELECT COALESCE(SUM(estimated_fare),0) FROM cab_bookings
+        WHERE driver_id = $1
+          AND status = 'completed'
+          AND DATE(updated_at) = CURRENT_DATE
+      `, [driver_id]),
+
+      pool.query(`
+        WITH logs AS (
+          SELECT created_at, status,
+          LEAD(created_at) OVER (ORDER BY created_at) AS next_time
+          FROM driver_status_logs
+          WHERE driver_id = $1
+            AND DATE(created_at) = CURRENT_DATE
+        )
+        SELECT ROUND(
+          COALESCE(
+            SUM(
+              EXTRACT(EPOCH FROM (COALESCE(next_time, NOW()) - created_at))
+            ) / 3600,
+            0
+          ),2
+        ) AS hours_online
+        FROM logs
+        WHERE status = 'online'
+      `, [driver_id])
+    ]);
+
+    res.json({
+      status: true,
+      data: {
+        total_jobs: Number(jobs.rows[0].count),
+        total_distance: Number(distance.rows[0].coalesce),
+        total_earned: Number(earnings.rows[0].coalesce),
+        hours_online: Number(hours.rows[0].hours_online || 0)
+      }
+    });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ status: false, message: "Server error" });
   }
 };

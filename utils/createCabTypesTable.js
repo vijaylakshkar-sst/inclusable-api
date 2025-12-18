@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS cab_types (
     name VARCHAR(50) NOT NULL,
     category VARCHAR(50),
     description TEXT,
-    fare_per_km FLOAT NOT NULL,
+    standard_price FLOAT NOT NULL,
     seating_capacity INT DEFAULT 4,
     luggage_capacity VARCHAR(50),
     thumbnail_url TEXT,

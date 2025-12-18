@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS cab_bookings (
     user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     driver_id INT REFERENCES drivers(id),
     cab_type_id INT REFERENCES cab_types(id),
+    disability_features_id INT REFERENCES disability_features(id),
     booking_type VARCHAR(20) NOT NULL CHECK (booking_type IN ('instant', 'later')),
     pickup_address TEXT NOT NULL,
     pickup_lat DECIMAL(10, 6) NOT NULL,
@@ -18,7 +19,7 @@ CREATE TABLE IF NOT EXISTS cab_bookings (
     estimated_fare FLOAT,
     booking_mode VARCHAR(20) NOT NULL,
     booking_otp VARCHAR(20) DEFAULT NULL,
-    booking_verified BOOLEAN DEFAULT FALSE;
+    booking_verified BOOLEAN DEFAULT FALSE,
     status VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending', 'scheduled', 'accepted', 'in_progress', 'completed', 'cancelled')),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

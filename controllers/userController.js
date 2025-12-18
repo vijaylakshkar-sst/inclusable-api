@@ -11,10 +11,10 @@ const stripe = require('../stripe');
 
 const templatePath = path.join(__dirname, '../emailTemplates/otpEmailTemplate.html');
 
-const EMAIL_FROM = process.env.EMAIL_FROM ;
-const EMAIL_PASS = process.env.EMAIL_PASS ;
-const EMAIL_HOST = process.env.EMAIL_HOST ;
-const EMAIL_PORT = process.env.EMAIL_PORT ;
+const EMAIL_FROM = process.env.EMAIL_FROM;
+const EMAIL_PASS = process.env.EMAIL_PASS;
+const EMAIL_HOST = process.env.EMAIL_HOST;
+const EMAIL_PORT = process.env.EMAIL_PORT;
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret';
 const BASE_IMAGE_URL = process.env.BASE_IMAGE_URL;
@@ -25,30 +25,30 @@ const validateFullName = (fullName) => {
   if (fullName.length < 2 || fullName.length > 55) {
     return { isValid: false, error: 'Full name must be between 2 and 55 characters.' };
   }
-  
+
   // Check for alphabetic characters only (including spaces and hyphens)
   const alphabeticRegex = /^[a-zA-Z\s\-']+$/;
   if (!alphabeticRegex.test(fullName)) {
     return { isValid: false, error: 'Full name can only contain alphabetic characters, spaces, hyphens, and apostrophes.' };
   }
-  
+
   // Check for emojis and special characters
   const emojiRegex = /[\u{1F600}-\u{1F64F}]|[\u{1F300}-\u{1F5FF}]|[\u{1F680}-\u{1F6FF}]|[\u{1F1E0}-\u{1F1FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]/u;
   if (emojiRegex.test(fullName)) {
     return { isValid: false, error: 'Full name cannot contain emojis.' };
   }
-  
+
   return { isValid: true };
 };
 
 const validatePhoneNumber = (phoneNumber) => {
   // Optional '+' at start, followed by 1 to 15 digits
   const phoneRegex = /^\+?\d{1,15}$/;
-  
+
   if (!phoneRegex.test(phoneNumber)) {
     return { isValid: false, error: 'Phone number must be up to 15 digits and may start with a +.' };
   }
-  
+
   return { isValid: true };
 };
 
@@ -57,19 +57,19 @@ const validatePassword = (password) => {
   if (password.length < 8 || password.length > 16) {
     return { isValid: false, error: 'Password must be between 8 and 16 characters.' };
   }
-  
+
   // Check for alphanumeric and special characters only (no emojis)
   const passwordRegex = /^[a-zA-Z0-9!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]+$/;
   if (!passwordRegex.test(password)) {
     return { isValid: false, error: 'Password can only contain alphanumeric characters and special symbols. Emojis are not allowed.' };
   }
-  
+
   // Check for emojis specifically
   const emojiRegex = /[\u{1F600}-\u{1F64F}]|[\u{1F300}-\u{1F5FF}]|[\u{1F680}-\u{1F6FF}]|[\u{1F1E0}-\u{1F1FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]/u;
   if (emojiRegex.test(password)) {
     return { isValid: false, error: 'Password cannot contain emojis.' };
   }
-  
+
   return { isValid: true };
 };
 
@@ -78,22 +78,22 @@ const validateEmail = (email) => {
   if (!emailRegex.test(email)) {
     return { isValid: false, error: 'Please enter a valid email address.' };
   }
-  
+
   return { isValid: true };
 };
 
 const transporter = nodemailer.createTransport({
-    host: EMAIL_HOST,
-    port: EMAIL_PORT,
-    secure: true, // true for port 465, false for 587
-    auth: {
-      user: EMAIL_FROM,
-      pass: EMAIL_PASS,
-    },
-    tls: {
-      rejectUnauthorized: false, // Add this line for Gmail in dev
-    },
-  });
+  host: EMAIL_HOST,
+  port: EMAIL_PORT,
+  secure: true, // true for port 465, false for 587
+  auth: {
+    user: EMAIL_FROM,
+    pass: EMAIL_PASS,
+  },
+  tls: {
+    rejectUnauthorized: false, // Add this line for Gmail in dev
+  },
+});
 
 function generateVerificationCode() {
   return Math.floor(1000 + Math.random() * 9000).toString(); // 4-digit code
@@ -120,7 +120,7 @@ const fileFilter = function (req, file, cb) {
   }
 };
 
-exports.upload = multer({ 
+exports.upload = multer({
   storage: storage,
   fileFilter: fileFilter,
   limits: { fileSize: 5 * 1024 * 1024 } // optional: 5MB limit
@@ -209,7 +209,7 @@ exports.register = async (req, res) => {
 
   } catch (err) {
     console.error('Registration error:', err.message);
-    res.status(500).json({error: err.message});
+    res.status(500).json({ error: err.message });
   }
 };
 
@@ -310,15 +310,15 @@ exports.verifyEmail = async (req, res) => {
     return res.status(400).json({ error: 'Email and code are required.' });
   }
   try {
-    
+
     // const userRes = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
     const userRes = await pool.query(
-  `SELECT * 
+      `SELECT * 
    FROM users 
    WHERE email = $1 
    AND deleted_at IS NULL`,
-  [email]
-);
+      [email]
+    );
     if (userRes.rows.length === 0) {
       return res.status(404).json({ error: 'User not found.' });
     }
@@ -330,44 +330,20 @@ exports.verifyEmail = async (req, res) => {
       return res.status(400).json({ error: 'Invalid verification code.' });
     }
 
-     if (user.verification_code !== code && type === 'forget') {
+    if (user.verification_code !== code && type === 'forget') {
       return res.status(400).json({ error: 'Invalid verification code.' });
     }
     await pool.query('UPDATE users SET is_verified = TRUE, verification_code = NULL WHERE id = $1', [user.id]);
-    
-    
+
+
     // Issue JWT after verification
-    if(type === 'register'){
+    if (type === 'register') {
 
       let stripeCustomerId = user.stripe_customer_id;
 
-       if (fcm_token && fcm_token.trim() !== '') {
-          await pool.query('UPDATE users SET fcm_token = $1 WHERE id = $2', [fcm_token, user.id]);
-        }
-
-      // if (user.role === 'Company') {
-      //   if (!user.stripe_account_id) {
-      //     // Create a connected account for payouts
-      //     const account = await stripe.accounts.create({
-      //       type: 'express', // or 'standard'
-      //       email: user.email,
-      //       business_type: 'individual', // or 'company'
-      //       capabilities: {
-      //         transfers: { requested: true },
-      //       },
-      //       metadata: {
-      //         user_id: user.id,
-      //         role: user.role,
-      //       },
-      //     });
-
-      //     // Save account ID in DB
-      //     await pool.query('UPDATE users SET stripe_account_id = $1 WHERE id = $2', [
-      //       account.id,
-      //       user.id,
-      //     ]);
-      //   }
-      // }
+      if (fcm_token && fcm_token.trim() !== '') {
+        await pool.query('UPDATE users SET fcm_token = $1 WHERE id = $2', [fcm_token, user.id]);
+      }     
 
       const token = jwt.sign({ userId: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
       res.json({
@@ -386,18 +362,18 @@ exports.verifyEmail = async (req, res) => {
           profile_image: user.profile_image,
           date_of_birth: user.date_of_birth,
           gender: user.gender,
-          stripe_account_status: user.stripe_account_status === '3' ? "Active" :  user.stripe_account_status === '2' ? "Under Review": "Pending",
+          stripe_account_status: user.stripe_account_status === '3' ? "Active" : user.stripe_account_status === '2' ? "Under Review" : "Pending",
           created_at: user.created_at,
           updated_at: user.updated_at
         }
       });
-    }else{
+    } else {
       res.json({
         status: true,
-        message: 'Email verified successfully.',        
+        message: 'Email verified successfully.',
       });
     }
-   
+
   } catch (err) {
     console.error('Email verification error:', err.message);
     res.status(500).json({ error: 'Internal server error.' });
@@ -438,10 +414,10 @@ exports.resendVerificationCode = async (req, res) => {
 
     await transporter.sendMail(mailOptions);
 
-    res.json({status: true, message: 'Verification code resent successfully.' });
+    res.json({ status: true, message: 'Verification code resent successfully.' });
   } catch (err) {
     console.error('Resend verification error:', err.message);
-    res.status(500).json({status: false, error: 'Internal server error.' });
+    res.status(500).json({ status: false, error: 'Internal server error.' });
   }
 };
 
@@ -449,8 +425,8 @@ exports.addAdditionalDetails = async (req, res) => {
   const { date_of_birth, gender, skipped } = req.body;
   let profile_image = null;
 
-  console.log(req.files,'profile_image');
-  
+  console.log(req.files, 'profile_image');
+
   const email = req.user.email;
   if (!email) {
     return res.status(400).json({ error: 'User email not found in token.' });
@@ -554,8 +530,8 @@ exports.login = async (req, res) => {
     // Issue JWT
     const token = jwt.sign(
       { userId: user.id, email: user.email, role: user.role },
-      JWT_SECRET,
-      { expiresIn: '7d' }
+      process.env.JWT_SECRET,   // ✅ FIX
+      { expiresIn: "7d" }
     );
 
     // Update FCM token if provided
@@ -651,8 +627,8 @@ exports.login = async (req, res) => {
         user.stripe_account_status === '3'
           ? 'Active'
           : user.stripe_account_status === '2'
-          ? 'Under Review'
-          : 'Pending',
+            ? 'Under Review'
+            : 'Pending',
       created_at: user.created_at,
       updated_at: user.updated_at,
       fcm_token
@@ -700,6 +676,25 @@ exports.login = async (req, res) => {
       };
     }
 
+    // 🚖 Add driver details for Cab Owner
+    if (user.role === 'Cab Owner') {
+      const driverRes = await client.query(
+        `SELECT 
+            id,
+            cab_type_id,
+            vehicle_number,
+            license_number,
+            status
+        FROM drivers
+        WHERE user_id = $1
+        LIMIT 1`,
+        [userId]
+      );
+
+      userData.driver_details =
+        driverRes.rows.length > 0 ? driverRes.rows[0] : null;
+    }
+
     return res.json({
       status: true,
       message: 'Login successful.',
@@ -720,20 +715,20 @@ exports.login = async (req, res) => {
 // exports.login = async (req, res) => {
 
 //   const { email, password,fcm_token } = req.body;
-  
+
 //   const client = await pool.connect();
-  
+
 //   // New comprehensive validation
 //   if (!email || !password) {
 //     return res.status(400).json({ error: 'Email and password are required.' });
 //   }
-  
+
 //   // Validate email
 //   const emailValidation = validateEmail(email);
 //   if (!emailValidation.isValid) {
 //     return res.status(400).json({ error: emailValidation.error });
 //   }
-  
+
 //   // Validate password (basic check for login)
 //   if (password.length < 1) {
 //     return res.status(400).json({ error: 'Password is required.' });
@@ -814,7 +809,7 @@ exports.login = async (req, res) => {
 //       has_completed_business_details = !!(user.business_name && user.business_category && user.business_email && user.business_phone_number && user.abn_number && user.year_experience);
 //     }
 //     if (skipped.includes('business_details')) has_completed_business_details = true;
-    
+
 //     const skipData = {
 //         has_completed_additional_details,
 //         has_completed_location_accessibility,
@@ -892,7 +887,7 @@ exports.login = async (req, res) => {
 //       message: 'Login successful.',
 //       token,
 //       data: {skipData,user:userData} ,
-      
+
 //     });
 //   } catch (err) {
 //     console.error('Login error:', err.message);
@@ -959,7 +954,7 @@ exports.checkOnboardingCompletion = async (req, res) => {
     const user = fullUserRes.rows[0];
     res.json({
       status: true,
-      data:{
+      data: {
         has_completed_additional_details,
         has_completed_location_accessibility,
         has_completed_ndis_information,
@@ -1160,7 +1155,7 @@ exports.updateProfile = async (req, res) => {
     };
 
 
-      // Step 2: Fetch NDIS Information
+    // Step 2: Fetch NDIS Information
     const ndisResult = await pool.query(
       `SELECT 
         id,
@@ -1190,12 +1185,12 @@ exports.updateProfile = async (req, res) => {
     }
 
 
-     if (updatedUser.role === "NDIS Member") {
-        responseData = {
+    if (updatedUser.role === "NDIS Member") {
+      responseData = {
         ...responseData,
-          ndis_information: ndisInfo,
-          };
-     }
+        ndis_information: ndisInfo,
+      };
+    }
     if (updatedUser.role === "Company") {
       responseData = {
         ...responseData,
@@ -1211,7 +1206,7 @@ exports.updateProfile = async (req, res) => {
         address: updatedUser.address,
         business_overview: updatedUser.business_overview,
         event_types: updatedUser.event_types,
-        accessibility: updatedUser.accessibility      
+        accessibility: updatedUser.accessibility
       };
     }
 
@@ -1258,14 +1253,14 @@ exports.changePassword = async (req, res) => {
     const hashedPassword = await bcrypt.hash(new_password, 10);
     await pool.query('UPDATE users SET password = $1, updated_at = NOW() WHERE id = $2', [hashedPassword, user_id]);
 
-    res.json({  message: 'Password changed successfully.', status: true });
+    res.json({ message: 'Password changed successfully.', status: true });
   } catch (err) {
     console.error('Change Password Error:', err.message);
     res.status(500).json({ status: false, error: 'Failed to change password.' });
   }
 };
 
-exports.updatePassword = async (req, res) => { 
+exports.updatePassword = async (req, res) => {
 
   const { new_password, email } = req.body;
 
@@ -1282,13 +1277,13 @@ exports.updatePassword = async (req, res) => {
       return res.status(404).json({ status: false, error: 'User not found.' });
     }
 
-    const user = userResult.rows[0];   
+    const user = userResult.rows[0];
 
     // Hash and update new password
     const hashedPassword = await bcrypt.hash(new_password, 10);
     await pool.query('UPDATE users SET password = $1, updated_at = NOW() WHERE email = $2', [hashedPassword, email]);
 
-    res.json({  message: 'Password changed successfully.', status: true });
+    res.json({ message: 'Password changed successfully.', status: true });
   } catch (err) {
     console.error('Change Password Error:', err.message);
     res.status(500).json({ status: false, error: 'Failed to change password.' });
@@ -1371,8 +1366,8 @@ exports.getProfile = async (req, res) => {
     // Step 3: Format fields
     user.date_of_birth = user.date_of_birth
       ? new Date(user.date_of_birth.getTime() + 5.5 * 60 * 60 * 1000)
-          .toISOString()
-          .split("T")[0]
+        .toISOString()
+        .split("T")[0]
       : null;
 
     const BASE_IMAGE_URL = process.env.BASE_IMAGE_URL || "http://localhost:3000/uploads";
@@ -1427,7 +1422,7 @@ exports.getProfile = async (req, res) => {
       profile_image_url: user.profile_image_url,
       date_of_birth: user.date_of_birth,
       gender: user.gender,
-      stripe_account_status:  user.stripe_account_status === '3' ? "Active" :  user.stripe_account_status === '2' ? "Under Review": "Pending",
+      stripe_account_status: user.stripe_account_status === '3' ? "Active" : user.stripe_account_status === '2' ? "Under Review" : "Pending",
       is_verified: user.is_verified,
       created_at: user.created_at,
       updated_at: user.updated_at,
@@ -1523,7 +1518,7 @@ exports.createBankLink = async (req, res) => {
         session_url: session.url, // Stripe-hosted link
         session_secret: session.client_secret,
         session_id: session.id
-        }
+      }
     });
   } catch (error) {
     console.error("Create bank link error:", error.message);
@@ -1750,7 +1745,7 @@ exports.registerCabOwner = async (req, res) => {
     if (req.files) {
       if (req.files["profile_image"]?.[0]) {
         profile_image = req.files["profile_image"][0].filename;
-      }     
+      }
     }
 
     // 🧾 Validation
@@ -1791,7 +1786,7 @@ exports.registerCabOwner = async (req, res) => {
       otp,
     ]);
 
-     // Load and replace placeholders in email template
+    // Load and replace placeholders in email template
     let emailTemplate = fs.readFileSync(templatePath, 'utf-8');
     emailTemplate = emailTemplate
       .replace('{{full_name}}', full_name)
@@ -1873,8 +1868,8 @@ exports.privacyPolicy = async (req, res) => {
 exports.termCondition = async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM terms_conditions ORDER BY created_at DESC');
-    res.json({status:true, data: result.rows});
+    res.json({ status: true, data: result.rows });
   } catch (err) {
-    res.status(500).json({status:false, error: err.message });
+    res.status(500).json({ status: false, error: err.message });
   }
 };
