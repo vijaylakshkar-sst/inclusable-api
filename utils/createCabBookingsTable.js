@@ -9,6 +9,8 @@ CREATE TABLE IF NOT EXISTS cab_bookings (
     disability_features_id INT REFERENCES disability_features(id),
     booking_type VARCHAR(20) NOT NULL CHECK (booking_type IN ('instant', 'later')),
     pickup_address TEXT NOT NULL,
+    payment_intent_id VARCHAR(255),
+    payment_status VARCHAR(50) DEFAULT 'pending',
     pickup_lat DECIMAL(10, 6) NOT NULL,
     pickup_lng DECIMAL(10, 6) NOT NULL,
     drop_address TEXT NOT NULL,

@@ -1,5 +1,6 @@
 const pool = require('../dbconfig');
 const { sendNotification, sendNotificationToDriver } = require('../hooks/notification');
+const stripe = require('../stripe');
 
 const BASE_IMAGE_URL = process.env.BASE_IMAGE_URL;
 
@@ -581,3 +582,63 @@ exports.submitDriverRating = async (req, res) => {
     client.release();
   }
 };
+
+
+exports.createSetupIntent = async (req, res) => {
+  const userId = req.user?.userId;
+    
+  // get / create stripe customer for user
+  let customer_id;
+
+  const result = await pool.query(
+    "SELECT stripe_customer_id FROM users WHERE id=$1",
+    [userId]
+  );
+
+  if(result.rows[0].stripe_customer_id){
+    customer_id = result.rows[0].stripe_customer_id;
+  }else{
+    const customer = await stripe.customers.create({
+      metadata: { userId },
+    });
+    customer_id = customer.id;
+
+    await pool.query(
+      "UPDATE users SET stripe_customer_id=$1 WHERE id=$2",
+      [customer.id, userId]
+    );
+  }
+
+  // now create setup intent
+  const setupIntent = await stripe.setupIntents.create({
+    customer: customer_id,
+  });
+
+  res.json({
+    status: true,
+    clientSecret: setupIntent.client_secret
+  });
+};
+
+exports.savePaymentMethod = async(req,res)=>{
+  const userId = req.user?.userId;
+
+  const { customerId, paymentMethodId } = req.body;
+
+  const pm = await stripe.paymentMethods.retrieve(paymentMethodId);
+
+  await pool.query(
+    `INSERT INTO stripe_payment_methods
+     (user_id, customer_id, payment_method_id, brand, last4)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [
+      userId,
+      customerId,
+      paymentMethodId,
+      pm.card.brand,
+      pm.card.last4,
+    ]
+  );
+
+  res.json({ success:true });
+}

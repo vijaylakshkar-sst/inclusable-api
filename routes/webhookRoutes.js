@@ -12,4 +12,6 @@ router.post(
 );
 
 
+router.post("/stripe/cab-booking-webhook", express.raw({ type: "application/json" }), webhookController.handleCabBookingWebhook);
+
 module.exports = router;

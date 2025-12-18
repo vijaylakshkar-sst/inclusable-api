@@ -194,3 +194,53 @@ exports.handleStripeWebhook = async (req, res) => {
 
   res.json({ received: true });
 };
+
+
+exports.handleCabBookingWebhook = async (req, res) => {
+  const sig = req.headers["stripe-signature"];
+
+  let event;
+  try {
+    event = stripe.webhooks.constructEvent(
+      req.body,
+      sig,
+      process.env.STRIPE_WEBHOOK_SECRET
+    );
+  } catch (err) {
+    console.log("⚠️ Webhook signature verification failed");
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  const intent = event.data.object;
+
+  switch (event.type) {
+    case "payment_intent.succeeded":
+      console.log("💰 Ride payment captured:", intent.id);
+
+      await pool.query(
+        `UPDATE cab_bookings
+         SET payment_status='paid'
+         WHERE payment_intent_id=$1`,
+        [intent.id]
+      );
+
+      break;
+
+    case "payment_intent.canceled":
+      console.log("❌ Payment hold released:", intent.id);
+
+      await pool.query(
+        `UPDATE cab_bookings
+         SET payment_status='refunded'
+         WHERE payment_intent_id=$1`,
+        [intent.id]
+      );
+
+      break;
+
+    default:
+      console.log(`Unhandled event type ${event.type}`);
+  } 
+
+  res.sendStatus(200);
+};
