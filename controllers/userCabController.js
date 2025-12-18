@@ -515,3 +515,69 @@ exports.getDisabilityFeaturs = async (req, res) => {
     res.status(500).json({ status: false, message: err.message });
   }
 };
+
+
+exports.submitDriverRating = async (req, res) => {
+  const userId = req.user?.userId;
+  const { driver_id, rating, description } = req.body;
+
+  if (!driver_id || !rating) {
+    return res.status(400).json({
+      status: false,
+      message: "Driver ID and rating are required",
+    });
+  }
+
+  if (rating < 1 || rating > 5) {
+    return res.status(400).json({
+      status: false,
+      message: "Rating must be between 1 and 5",
+    });
+  }
+
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    // 1️⃣ Ensure driver exists
+    const driverRes = await client.query(
+      "SELECT id FROM drivers WHERE id = $1",
+      [driver_id]
+    );
+
+    if (!driverRes.rows.length) {
+      throw new Error("Driver not found");
+    }
+
+    // 2️⃣ Insert review ✅
+    const reviewRes = await client.query(
+      `
+      INSERT INTO driver_reviews (user_id, driver_id, rating, description)
+      VALUES ($1, $2, $3, $4)
+      RETURNING *;
+      `,
+      [userId, driver_id, rating, description || null]
+    );
+
+    // ✅ COMMIT TRANSACTION
+    await client.query("COMMIT");
+
+    res.status(201).json({
+      status: true,
+      message: "Driver rated successfully",
+      data: reviewRes.rows[0],
+    });
+
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("❌ driver rating error:", err.message);
+
+    res.status(400).json({
+      status: false,
+      message: err.message,
+    });
+  } finally {
+    client.release();
+  }
+};

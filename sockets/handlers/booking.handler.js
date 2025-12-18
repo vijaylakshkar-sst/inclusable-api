@@ -16,7 +16,6 @@ module.exports = (io, socket) => {
           d.id AS driver_id,
           d.name AS driver_name,
           d.profile_image,
-          d.rating,
           d.vehicle_number,
           d.current_lat,
           d.current_lng,
@@ -24,7 +23,17 @@ module.exports = (io, socket) => {
           u.phone_number AS driver_phone,
 
           c.name AS cab_type,
-          c.thumbnail_url AS cab_image
+          c.thumbnail_url AS cab_image,
+
+          -- ⭐ Average driver rating
+          COALESCE(
+            (
+              SELECT ROUND(AVG(r.rating)::numeric, 1)
+              FROM driver_reviews r
+              WHERE r.driver_id = d.id
+            ),
+            5.0
+          ) AS driver_rating
 
         FROM cab_bookings b
         LEFT JOIN drivers d ON d.id = b.driver_id
@@ -52,9 +61,9 @@ module.exports = (io, socket) => {
         driver: {
           id: row.driver_id,
           name: row.driver_name,
-          phone_number: row.driver_phone,   // ✅ ADDED
+          phone_number: row.driver_phone,
           profile_image: row.profile_image,
-          rating: row.rating || 5.0,
+          rating: row.driver_rating, // ⭐ REAL AVERAGE
           vehicle_number: row.vehicle_number,
           cab_type: row.cab_type,
           cab_image: row.cab_image,

@@ -10,5 +10,6 @@ router.post('/cab-booking',auth, userCabController.bookCab);
 router.post('/cab-cancel/:booking_id', auth, userCabController.cancelBooking);
 router.get('/cab-track/:booking_id', auth, userCabController.trackDriver);
 router.get('/cab-types', auth, userCabController.cabTypes);
+router.post("/rating-submit", auth, userCabController.submitDriverRating );
 
 module.exports = router;
