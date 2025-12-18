@@ -29,20 +29,44 @@ module.exports = (io, socket) => {
   // ================================
   // DRIVER LOCATION UPDATE
   // ================================
-  socket.on("driver:location", async ({ driverId, lat, lng }) => {
-    try {
-      await pool.query(
-        `UPDATE drivers
-         SET current_lat = $1, current_lng = $2, updated_at = NOW()
-         WHERE id = $3`,
-        [lat, lng, driverId]
-      );
+  socket.on("driver:location:update", async ({ bookingId, lat, lng }) => {
+  try {
+    // 🔒 Verify booking + driver
+    const bookingRes = await pool.query(
+      `SELECT driver_id, status
+       FROM cab_bookings
+       WHERE id = $1`,
+      [bookingId]
+    );
 
-      io.emit(`driver:${driverId}:location`, { lat, lng });
-    } catch (err) {
-      console.error("❌ driver:location error:", err.message);
+    if (!bookingRes.rows.length) return;
+
+    if (!["accepted", "in_progress"].includes(bookingRes.rows[0].status)) {
+      return;
     }
-  });
+
+    const driverId = bookingRes.rows[0].driver_id;
+
+    // ✅ Update driver location
+    await pool.query(
+      `UPDATE drivers
+       SET current_lat = $1,
+           current_lng = $2,
+           updated_at = NOW()
+       WHERE id = $3`,
+      [lat, lng, driverId]
+    );
+
+    // 📡 Emit location ONLY to booking room
+    io.to(`booking:${bookingId}`).emit("booking:driverLocation", {
+      lat,
+      lng,
+    });
+
+  } catch (err) {
+    console.error("❌ driver:location:update error:", err.message);
+  }
+});
 
   // ================================
   // ✅ DRIVER GET BOOKINGS (NEW)
@@ -124,11 +148,11 @@ module.exports = (io, socket) => {
   // ===============================
   // ➕ NEW: UPDATE DRIVER STATUS
   // ===============================
-  socket.on("driver:updateStatus", async ({ status }) => {
+  socket.on("updateStatus", async ({ status }) => {
     const userId = socket.user?.userId;
 
     if (!["online", "offline"].includes(status)) {
-      return socket.emit("driver:updateStatus:error", {
+      return socket.emit("updateStatus:error", {
         message: "Invalid status"
       });
     }
@@ -153,7 +177,7 @@ module.exports = (io, socket) => {
       // 🔴 Prevent duplicate logs (online → online)
       if (currentStatus === status) {
         await client.query("ROLLBACK");
-        return socket.emit("driver:updateStatus:error", {
+        return socket.emit("updateStatus:error", {
           message: `Driver already ${status}`
         });
       }
@@ -176,11 +200,11 @@ module.exports = (io, socket) => {
       await client.query("COMMIT");
 
       // 🔹 Broadcast update
-      io.emit("driver:statusUpdated", { driverId, status });
+      io.emit("statusUpdated", { driverId, status });
 
     } catch (err) {
       await client.query("ROLLBACK");
-      socket.emit("driver:updateStatus:error", {
+      socket.emit("updateStatus:error", {
         message: err.message
       });
     } finally {
@@ -188,68 +212,138 @@ module.exports = (io, socket) => {
     }
   });
 
-  // ===============================
-  // ➕ NEW: ACCEPT BOOKING
-  // ===============================
-  socket.on("driver:acceptBooking", async ({ bookingId }) => {
+  // ======================================
+  // 🚖 DRIVER RIDE ACTION (ACCEPT / IGNORE / CANCEL)
+  // ======================================
+  socket.on("rideAction", async ({ bookingId, action }) => {
     const userId = socket.user?.userId;
 
+    if (!bookingId || !["accept", "ignore", "cancel"].includes(action)) {
+      return socket.emit("rideAction:error", {
+        message: "Invalid ride action",
+      });
+    }
+
     try {
+      // ✅ Get driver
       const driverRes = await pool.query(
         "SELECT id FROM drivers WHERE user_id = $1 LIMIT 1",
         [userId]
       );
 
-      if (!driverRes.rows[0]) throw new Error("Driver not found");
+      if (!driverRes.rows.length) {
+        throw new Error("Driver not found");
+      }
 
       const driverId = driverRes.rows[0].id;
 
+      // 🔒 Lock booking row
       const bookingRes = await pool.query(
-        "SELECT status FROM cab_bookings WHERE id=$1",
+        `SELECT status
+       FROM cab_bookings
+       WHERE id = $1
+       FOR UPDATE`,
         [bookingId]
       );
 
-      if (!bookingRes.rows[0] || bookingRes.rows[0].status !== "pending") {
-        throw new Error("Booking not available");
+      if (!bookingRes.rows.length) {
+        throw new Error("Booking not found");
       }
 
-      await pool.query(
-        `UPDATE cab_bookings
-         SET driver_id=$1, status='accepted', updated_at=NOW()
-         WHERE id=$2`,
-        [driverId, bookingId]
-      );
+      const currentStatus = bookingRes.rows[0].status;
 
-      socket.emit("driver:acceptBooking:success", { bookingId });
-      io.to(`booking:${bookingId}`).emit("booking:accepted", { driverId });
+      // ======================
+      // ✅ ACCEPT BOOKING
+      // ======================
+      if (action === "accept") {
+        if (currentStatus !== "pending") {
+          throw new Error("Booking not available for acceptance");
+        }
+
+        await pool.query(
+          `UPDATE cab_bookings
+         SET driver_id = $1,
+             status = 'accepted',
+             updated_at = NOW()
+         WHERE id = $2`,
+          [driverId, bookingId]
+        );
+
+        socket.emit("rideAction:success", {
+          bookingId,
+          action: "accepted",
+        });
+
+        io.to(`booking:${bookingId}`).emit("booking:accepted", {
+          bookingId,
+          driverId,
+        });
+      }
+
+      // ======================
+      // ❌ IGNORE BOOKING
+      // ======================
+      if (action === "ignore") {
+        if (currentStatus !== "pending") {
+          throw new Error("Booking cannot be ignored");
+        }
+
+        await pool.query(
+          `UPDATE cab_bookings
+         SET status = 'cancelled',
+             updated_at = NOW()
+         WHERE id = $1`,
+          [bookingId]
+        );
+
+        socket.emit("rideAction:success", {
+          bookingId,
+          action: "ignored",
+        });
+
+        io.to(`booking:${bookingId}`).emit("booking:ignored", {
+          bookingId,
+        });
+      }
+
+      // ======================
+      // 🚫 CANCEL RIDE (AFTER ACCEPTED)
+      // ======================
+      if (action === "cancel") {
+        if (!["accepted", "in_progress"].includes(currentStatus)) {
+          throw new Error("Ride cannot be cancelled at this stage");
+        }
+
+        await pool.query(
+          `UPDATE cab_bookings
+         SET status = 'cancelled',
+             updated_at = NOW()
+         WHERE id = $1`,
+          [bookingId]
+        );
+
+        socket.emit("rideAction:success", {
+          bookingId,
+          action: "cancelled",
+        });
+
+        io.to(`booking:${bookingId}`).emit("booking:cancelled", {
+          bookingId,
+          cancelledBy: "driver",
+        });
+      }
 
     } catch (err) {
-      socket.emit("driver:acceptBooking:error", { message: err.message });
-    }
-  });
-
-  // ===============================
-  // ➕ NEW: IGNORE BOOKING
-  // ===============================
-  socket.on("driver:ignoreBooking", async ({ bookingId }) => {
-    try {
-      await pool.query(
-        `UPDATE cab_bookings
-         SET status='cancelled', updated_at=NOW()
-         WHERE id=$1 AND status='pending'`,
-        [bookingId]
-      );
-
-      socket.emit("driver:ignoreBooking:success", { bookingId });
-    } catch (err) {
-      socket.emit("driver:ignoreBooking:error", { message: err.message });
+      socket.emit("rideAction:error", {
+        message: err.message,
+      });
     }
   });
 
   // ===============================
   // ➕ NEW: VERIFY OTP
   // ===============================
-  socket.on("driver:verifyOtp", async ({ bookingId, otp }) => {
+  socket.on("verifyOtp", async ({ bookingId, otp }) => {
     try {
       const res = await pool.query(
         `UPDATE cab_bookings
@@ -260,16 +354,16 @@ module.exports = (io, socket) => {
 
       if (res.rowCount === 0) throw new Error("Invalid OTP");
 
-      socket.emit("driver:verifyOtp:success", { bookingId });
+      socket.emit("verifyOtp:success", { bookingId });
     } catch (err) {
-      socket.emit("driver:verifyOtp:error", { message: err.message });
+      socket.emit("verifyOtp:error", { message: err.message });
     }
   });
 
   // ===============================
   // ➕ NEW: COMPLETE RIDE
   // ===============================
-  socket.on("driver:completeRide", async ({ bookingId, distance_km, total_fare }) => {
+  socket.on("completeRide", async ({ bookingId, distance_km, total_fare }) => {
     try {
       await pool.query(
         `UPDATE cab_bookings
@@ -281,28 +375,27 @@ module.exports = (io, socket) => {
         [distance_km, total_fare, bookingId]
       );
 
-      socket.emit("driver:completeRide:success", { bookingId });
+      socket.emit("completeRide:success", { bookingId });
     } catch (err) {
-      socket.emit("driver:completeRide:error", { message: err.message });
+      socket.emit("completeRide:error", { message: err.message });
     }
   });
 
-  // ===============================
-  // ➕ NEW: CANCEL RIDE
-  // ===============================
-  socket.on("driver:cancelRide", async ({ bookingId }) => {
+  socket.on("currentLocation", async ({ driverId, lat, lng }) => {
     try {
       await pool.query(
-        `UPDATE cab_bookings
-         SET status='cancelled', updated_at=NOW()
-         WHERE id=$1`,
-        [bookingId]
+        `UPDATE drivers
+         SET current_lat = $1, current_lng = $2, updated_at = NOW()
+         WHERE id = $3`,
+        [lat, lng, driverId]
       );
 
-      socket.emit("driver:cancelRide:success", { bookingId });
+      io.emit(`driver:${driverId}:location`, { lat, lng });
     } catch (err) {
-      socket.emit("driver:cancelRide:error", { message: err.message });
+      console.error("❌ driver:location error:", err.message);
     }
   });
 
 };
+
+

@@ -506,3 +506,12 @@ exports.cabTypes = async (req, res) => {
     res.status(500).json({ status: false, message: 'Server Error' });
   }
 };
+
+exports.getDisabilityFeaturs = async (req, res) => {
+  try {
+    const result = await pool.query(`SELECT id, name FROM disability_features ORDER BY name ASC`);
+    res.json({ status: true, data: result.rows });
+  } catch (err) {
+    res.status(500).json({ status: false, message: err.message });
+  }
+};
