@@ -23,6 +23,7 @@ const cabTypeRoutes = require('./routes/admin/cabTypeRoutes');
 const supportTicketRoutes = require('./routes/admin/supportTicketRoutes');
 const vehicleMakesRoutes = require('./routes/admin/vehicleMakesRoutes');
 const vehicleModelsRoutes = require('./routes/admin/vehicleModelsRoutes');
+const cancellationRuleRoutes = require('./routes/admin/cancellationRuleRoutes');
 
 
 
@@ -65,6 +66,7 @@ app.use('/api/v1/admin/cab-types', cabTypeRoutes);
 app.use('/api/v1/admin/support-tickets', supportTicketRoutes);
 app.use('/api/v1/admin/vehicle-makes', vehicleMakesRoutes);
 app.use('/api/v1/admin/vehicle-models', vehicleModelsRoutes);
+app.use('/api/v1/admin/cancellation-rules', cancellationRuleRoutes);
 
 
 

@@ -8,7 +8,7 @@ exports.createCabType = async (req, res) => {
     disability_feature_price,
   } = req.body;
 
-  const thumbnail_url = req.file ? `${req.file.filename}` : null;
+  const thumbnail_url = req.file ? `cabs/${req.file.filename}` : null;
 
   try {
     const client = await pool.connect();
@@ -83,7 +83,7 @@ exports.updateCabType = async (req, res) => {
     disability_feature_price,
   } = req.body;
 
-  const thumbnail_url = req.file ? `${req.file.filename}` : null;
+  const thumbnail_url = req.file ? `cabs/${req.file.filename}` : null;
 
   try {
     const client = await pool.connect();
