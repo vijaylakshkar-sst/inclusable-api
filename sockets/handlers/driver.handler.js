@@ -68,83 +68,6 @@ module.exports = (io, socket) => {
     }
   });
 
-  // ================================
-  // ✅ DRIVER GET BOOKINGS (NEW)
-  // ================================
-  socket.on("driver:getBookings", async () => {
-    try {
-      const userId = socket.user?.userId; // from JWT middleware
-
-      if (!userId) {
-        return socket.emit("driver:getBookings:error", {
-          status: false,
-          message: "Unauthorized"
-        });
-      }
-
-      // 1️⃣ get driver id
-      const driverResult = await pool.query(
-        "SELECT id FROM drivers WHERE user_id = $1 LIMIT 1",
-        [userId]
-      );
-
-      if (driverResult.rowCount === 0) {
-        return socket.emit("driver:getBookings:error", {
-          status: false,
-          message: "Driver not found. Please complete your profile."
-        });
-      }
-
-      const driverId = driverResult.rows[0].id;
-
-      // 2️⃣ get pending bookings
-      const query = `
-        SELECT 
-          b.id,
-          b.booking_type,
-          b.pickup_address,
-          b.drop_address,
-          b.pickup_lat,
-          b.pickup_lng,
-          b.drop_lat,
-          b.drop_lng,
-          b.scheduled_time,
-          b.distance_km,
-          b.estimated_fare,
-          b.status,
-          b.booking_mode,
-          b.booking_otp,
-          b.booking_verified,
-          b.created_at,
-          u.full_name AS passenger_name,
-          u.phone_number AS passenger_phone,
-          ct.name AS cab_type_name
-        FROM cab_bookings b
-        LEFT JOIN users u ON b.user_id = u.id
-        LEFT JOIN cab_types ct ON b.cab_type_id = ct.id
-        WHERE b.driver_id = $1 AND b.status = 'pending'
-        ORDER BY b.created_at DESC
-      `;
-
-      const bookings = await pool.query(query, [driverId]);
-
-      socket.emit("driver:bookings", {
-        status: true,
-        count: bookings.rowCount,
-        data: bookings.rows
-      });
-
-    } catch (err) {
-      console.error("❌ driver:getBookings error:", err.message);
-
-      socket.emit("driver:getBookings:error", {
-        status: false,
-        message: "Server error while fetching bookings"
-      });
-    }
-  });
-
-
   // ===============================
   // ➕ NEW: UPDATE DRIVER STATUS
   // ===============================
@@ -262,18 +185,18 @@ module.exports = (io, socket) => {
 
         // 🔻 fetch booking details
         const bookingDetail = await pool.query(
-          `SELECT customer_id, estimated_fare FROM cab_bookings WHERE id=$1`,
+          `SELECT user_id, estimated_fare FROM cab_bookings WHERE id=$1`,
           [bookingId]
         );
 
-        const { customer_id, estimated_fare } = bookingDetail.rows[0];
+        const { user_id, estimated_fare } = bookingDetail.rows[0];
 
         // 🔻 fetch payment method from DB
         const pmRes = await pool.query(
           `SELECT payment_method_id, customer_id 
             FROM stripe_payment_methods 
             WHERE user_id=$1 LIMIT 1`,
-          [customer_id]
+          [user_id]
         );
 
         if (!pmRes.rows.length) {

@@ -172,7 +172,6 @@ exports.findCabTypesWithFare = async (req, res) => {
 
 
 exports.bookCab = async (req, res) => {
-
   const user_id = req.user?.userId;
   const {
     cab_type_id,
@@ -197,104 +196,106 @@ exports.bookCab = async (req, res) => {
   }
 
   if (!['instant', 'later'].includes(booking_type)) {
-    return res.status(400).json({ status: false, message: 'Invalid booking_type. Use instant or later.' });
+    return res.status(400).json({ status: false, message: 'Invalid booking_type' });
   }
 
   if (booking_type === 'later' && !scheduled_time) {
-    return res.status(400).json({ status: false, message: 'Scheduled time is required for later bookings' });
+    return res.status(400).json({ status: false, message: 'Scheduled time required' });
   }
 
   if (!['cash', 'credit card', 'other'].includes(booking_mode)) {
-    return res.status(400).json({ status: false, message: 'Invalid booking_mode. Use cash, credit card , other.' });
+    return res.status(400).json({ status: false, message: 'Invalid booking_mode' });
   }
 
+  const client = await pool.connect();
+
   try {
-    const client = await pool.connect();
+    await client.query('BEGIN');
 
-    // ✅ Check if user exists
-    const userCheck = await client.query('SELECT id FROM users WHERE id = $1', [user_id]);
-    if (userCheck.rows.length === 0) {
-      return res.status(404).json({ status: false, message: 'User not found' });
+    // ✅ User check
+    const userCheck = await client.query(
+      'SELECT id FROM users WHERE id = $1',
+      [user_id]
+    );
+    if (userCheck.rowCount === 0) {
+      throw new Error('USER_NOT_FOUND');
     }
 
-    // ✅ Check if cab type exists
-    const cabCheck = await client.query('SELECT * FROM cab_types WHERE id = $1', [cab_type_id]);
-    if (cabCheck.rows.length === 0) {
-      return res.status(404).json({ status: false, message: 'Cab type not found' });
+    // ✅ Cab check
+    const cabRes = await client.query(
+      'SELECT * FROM cab_types WHERE id = $1',
+      [cab_type_id]
+    );
+    if (cabRes.rowCount === 0) {
+      throw new Error('CAB_NOT_FOUND');
     }
 
-    const cabType = cabCheck.rows[0];
+    const cabType = cabRes.rows[0];
 
-    // ✅ Calculate distance using Haversine formula (server-side)
+    // ✅ Distance calculation
     const rad = Math.PI / 180;
-    const R = 6371; // Earth radius in km
+    const R = 6371;
 
     const dLat = (drop_lat - pickup_lat) * rad;
     const dLng = (drop_lng - pickup_lng) * rad;
 
     const a =
       Math.sin(dLat / 2) ** 2 +
-      Math.cos(pickup_lat * rad) * Math.cos(drop_lat * rad) *
+      Math.cos(pickup_lat * rad) *
+      Math.cos(drop_lat * rad) *
       Math.sin(dLng / 2) ** 2;
 
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    const distance_km = parseFloat((R * c).toFixed(2));
+    const distance_km = +(R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)))).toFixed(2);
 
-    const estimated_fare = parseFloat((cabType.base_fare || 0 + distance_km * cabType.standard_price).toFixed(2));
+    const estimated_fare = +(
+      (cabType.base_fare || 0) +
+      distance_km * cabType.standard_price
+    ).toFixed(2);
 
     let driverId = null;
 
-    // ✅ Assign driver only if booking_type = instant
+    // ✅ Assign driver (LOCKED)
     if (booking_type === 'instant') {
-
-      let driverQuery = `
-        SELECT d.id,
-          (
-            6371 * acos(
-              cos(radians($1)) * cos(radians(d.current_lat)) *
-              cos(radians(d.current_lng) - radians($2)) +
-              sin(radians($1)) * sin(radians(d.current_lat))
+      const driverQuery = `
+          SELECT d.id
+          FROM drivers d
+          WHERE d.is_available = true
+            AND d.status = 'online'
+            AND d.cab_type_id = $1
+            AND (
+              $2::INT IS NULL OR EXISTS (
+                SELECT 1
+                FROM driver_disability_features ddf
+                WHERE ddf.driver_id = d.id
+                  AND ddf.disability_feature_id = $2
+              )
             )
-          ) AS distance_km
-        FROM drivers d
-      `;
-
-      const params = [pickup_lat, pickup_lng, cab_type_id];
-      let paramIndex = 4;
-
-      // ✅ Join only if disability feature is selected
-      if (disability_features_id) {
-        driverQuery += `
-          INNER JOIN driver_disability_features ddf
-            ON ddf.driver_id = d.id
-          AND ddf.disability_feature_id = $${paramIndex}
+          ORDER BY (
+            6371 * acos(
+              cos(radians($3)) * cos(radians(d.current_lat)) *
+              cos(radians(d.current_lng) - radians($4)) +
+              sin(radians($3)) * sin(radians(d.current_lat))
+            )
+          ) ASC
+          LIMIT 1
+          FOR UPDATE;
         `;
-        params.push(disability_features_id);
-        paramIndex++;
-      }
 
-      driverQuery += `
-        WHERE d.is_available = true
-          AND d.status = 'online'
-          AND d.cab_type_id = $3
-        ORDER BY distance_km ASC
-        LIMIT 1;
-      `;
+        const params = [
+          cab_type_id,                     // $1
+          disability_features_id || null,  // $2
+          pickup_lat,                      // $3
+          pickup_lng                       // $4
+        ];
 
       const driverRes = await client.query(driverQuery, params);
 
-      if (driverRes.rows.length === 0) {
-        return res.status(404).json({
-          status: false,
-          message: disability_features_id
-            ? 'No nearby drivers available with selected disability feature'
-            : 'No nearby drivers available for this cab type',
-        });
+      if (driverRes.rowCount === 0) {
+        throw new Error('NO_DRIVER_AVAILABLE');
       }
 
       driverId = driverRes.rows[0].id;
 
-      // 🔒 Make driver unavailable
       await client.query(
         'UPDATE drivers SET is_available = false WHERE id = $1',
         [driverId]
@@ -303,14 +304,14 @@ exports.bookCab = async (req, res) => {
 
     const booking_otp = Math.floor(1000 + Math.random() * 9000);
 
-    const result = await client.query(
+    const bookingRes = await client.query(
       `
       INSERT INTO cab_bookings (
         user_id, driver_id, cab_type_id, booking_type,
         pickup_address, pickup_lat, pickup_lng,
         drop_address, drop_lat, drop_lng,
-        scheduled_time, distance_km, estimated_fare, status,
-        booking_mode, booking_otp, disability_features_id
+        scheduled_time, distance_km, estimated_fare,
+        status, booking_mode, booking_otp, disability_features_id
       )
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
       RETURNING *;
@@ -336,49 +337,36 @@ exports.bookCab = async (req, res) => {
       ]
     );
 
-    const booking = result.rows[0];
+    await client.query('COMMIT');
 
-    const driverResult = await client.query(
-      'SELECT id,user_id FROM drivers WHERE id = $1 LIMIT 1',
-      [driverId]
-    );
-
-    if (driverResult.rowCount === 0) {
-      return res.status(404).json({
-        status: false,
-        message: 'Driver not found for this user'
-      });
-    }
-
-    const driver_user_id = driverResult.rows[0].user_id;
-
-    // Send notification to driver if assigned
-    if (driverId) {
-      await sendNotificationToDriver({
-        driverUserId: driver_user_id,
-        title: 'New Ride Assigned',
-        message: 'You have been assigned a new booking. Tap to view details.',
-        type: 'Booking',
-        booking_id: booking.id,
-        image_url: `${BASE_IMAGE_URL}/icons/check-circle.png`,
-        bg_color: '#1FB23F',
-        data: {
-          screen: 'BookingDetails',
-          sound: 'default'
-        }
-      });
-    }
-
-    res.status(201).json({
+    return res.status(201).json({
       status: true,
       message: `Your ${cabType.name} cab has been booked.`,
-      data: result.rows[0],
+      data: bookingRes.rows[0]
     });
 
-    client.release();
   } catch (err) {
+    await client.query('ROLLBACK');
+
     console.error('❌ BOOK CAB ERROR:', err.message);
-    res.status(500).json({ status: false, message: 'Server Error' });
+
+    if (err.message === 'NO_DRIVER_AVAILABLE') {
+      return res.status(404).json({ status: false, message: 'No drivers available' });
+    }
+
+    if (err.message === 'USER_NOT_FOUND') {
+      return res.status(404).json({ status: false, message: 'User not found' });
+    }
+
+    if (err.message === 'CAB_NOT_FOUND') {
+      return res.status(404).json({ status: false, message: 'Cab type not found' });
+    }
+
+    return res.status(500).json({ status: false, message: 'Server Error' });
+
+  } finally {
+    // 🔥 MOST IMPORTANT LINE
+    client.release();
   }
 };
 
@@ -585,39 +573,76 @@ exports.submitDriverRating = async (req, res) => {
 
 
 exports.createSetupIntent = async (req, res) => {
-  const userId = req.user?.userId;
-    
-  // get / create stripe customer for user
-  let customer_id;
+  try {
+    const userId = req.user?.userId;
+    const { stripe_key } = req.body;
 
-  const result = await pool.query(
-    "SELECT stripe_customer_id FROM users WHERE id=$1",
-    [userId]
-  );
+    if (!stripe_key || !["test", "production"].includes(stripe_key)) {
+      return res.status(400).json({
+        status: false,
+        message: "Invalid environment. Use 'test' or 'production'."
+      });
+    }
 
-  if(result.rows[0].stripe_customer_id){
-    customer_id = result.rows[0].stripe_customer_id;
-  }else{
-    const customer = await stripe.customers.create({
-      metadata: { userId },
-    });
-    customer_id = customer.id;
+    const StripeQuery = `
+      SELECT id, environment, publishable_key, secret_key
+      FROM stripe_keys
+      WHERE environment = $1 LIMIT 1
+    `;
+    const resultStripeKey = await pool.query(StripeQuery, [stripe_key]);
 
-    await pool.query(
-      "UPDATE users SET stripe_customer_id=$1 WHERE id=$2",
-      [customer.id, userId]
+    if (resultStripeKey.rows.length === 0) {
+      return res.status(404).json({
+        status: false,
+        message: `No Stripe keys found for environment: ${stripe_key}`
+      });
+    }
+
+    const stripe = require("stripe")(resultStripeKey.rows[0].secret_key);
+
+    // get or create Stripe customer
+    let customer_id;
+    const userRes = await pool.query(
+      "SELECT stripe_customer_id FROM users WHERE id=$1",
+      [userId]
     );
+
+    if (userRes.rows[0]?.stripe_customer_id) {
+      customer_id = userRes.rows[0].stripe_customer_id;
+    } else {
+      const customer = await stripe.customers.create({ metadata: { userId } });
+      customer_id = customer.id;
+      await pool.query(
+        "UPDATE users SET stripe_customer_id=$1 WHERE id=$2",
+        [customer_id, userId]
+      );
+    }
+
+    // create setup intent
+    const setupIntent = await stripe.setupIntents.create({ customer: customer_id });
+
+    // create ephemeral key correctly
+    const ephemeralKey = await stripe.ephemeralKeys.create(
+      { customer: customer_id },
+      { apiVersion: "2025-12-15.clover" } // ← use your exact Stripe API version
+    );
+
+    res.json({
+      status: true,
+      data: {
+        stripeKey: resultStripeKey.rows[0],
+        clientSecret: setupIntent.client_secret,
+        ephemeralKey: ephemeralKey.secret
+      }
+    });
+  } catch (err) {
+    console.error("Stripe error:", err);
+    res.status(500).json({
+      status: false,
+      message: "Internal server error",
+      error: err.message
+    });
   }
-
-  // now create setup intent
-  const setupIntent = await stripe.setupIntents.create({
-    customer: customer_id,
-  });
-
-  res.json({
-    status: true,
-    clientSecret: setupIntent.client_secret
-  });
 };
 
 exports.savePaymentMethod = async(req,res)=>{

@@ -137,6 +137,7 @@ exports.getProfile = async (req, res) => {
         is_verified,
         profile_image,
         date_of_birth,
+        address,
         gender,
         stripe_account_status,
         created_at,
@@ -277,7 +278,12 @@ exports.updateProfile = async (req, res) => {
             vehicle_make_id,
             vehicle_model_id,
             manufacturing_year,
-            disability_features
+            disability_features,
+            full_name,
+            email,
+            phone_number,
+            address,
+            date_of_birth
         } = req.body;
 
         // 🔹 3️⃣ Uploaded files
@@ -291,22 +297,22 @@ exports.updateProfile = async (req, res) => {
         // 🔹 4️⃣ Update driver details
         await client.query(
             `
-      UPDATE drivers SET
-        cab_type_id = COALESCE($1, cab_type_id),
-        license_number = COALESCE($2, license_number),
-        vehicle_number = COALESCE($3, vehicle_number),
-        vehicle_make_id = COALESCE($4, vehicle_make_id),
-        vehicle_model_id = COALESCE($5, vehicle_model_id),
-        manufacturing_year = COALESCE($6, manufacturing_year),
-        license_photo_front = COALESCE($7, license_photo_front),
-        license_photo_back = COALESCE($8, license_photo_back),
-        rc_copy = COALESCE($9, rc_copy),
-        insurance_copy = COALESCE($10, insurance_copy),
-        police_check_certificate = COALESCE($11, police_check_certificate),
-        wwvp_card = COALESCE($12, wwvp_card),
-        updated_at = NOW()
-      WHERE user_id = $13
-    `,
+            UPDATE drivers SET
+                cab_type_id = COALESCE($1, cab_type_id),
+                license_number = COALESCE($2, license_number),
+                vehicle_number = COALESCE($3, vehicle_number),
+                vehicle_make_id = COALESCE($4, vehicle_make_id),
+                vehicle_model_id = COALESCE($5, vehicle_model_id),
+                manufacturing_year = COALESCE($6, manufacturing_year),
+                license_photo_front = COALESCE($7, license_photo_front),
+                license_photo_back = COALESCE($8, license_photo_back),
+                rc_copy = COALESCE($9, rc_copy),
+                insurance_copy = COALESCE($10, insurance_copy),
+                police_check_certificate = COALESCE($11, police_check_certificate),
+                wwvp_card = COALESCE($12, wwvp_card),
+                updated_at = NOW()
+            WHERE user_id = $13
+        `,
             [
                 cab_type_id,
                 license_number,
@@ -341,28 +347,44 @@ exports.updateProfile = async (req, res) => {
             for (const featureId of features) {
                 await client.query(
                     `
-          INSERT INTO driver_disability_features (driver_id, disability_feature_id)
-          VALUES ($1, $2)
-        `,
+                    INSERT INTO driver_disability_features (driver_id, disability_feature_id)
+                    VALUES ($1, $2)
+                    `,
                     [driverId, featureId]
                 );
             }
         }
 
+        // 🔹 6️⃣ Update users table
+        await client.query(
+            `
+            UPDATE users SET
+                full_name = COALESCE($1, full_name),
+                email = COALESCE($2, email),
+                phone_number = COALESCE($3, phone_number),
+                address = COALESCE($4, address),
+                date_of_birth = COALESCE($5, date_of_birth),
+                updated_at = NOW()
+            WHERE id = $6
+            `,
+            [full_name, email, phone_number, address, date_of_birth, user_id]
+        );
+
         await client.query('COMMIT');
 
         res.status(200).json({
             status: true,
-            message: 'Driver profile updated successfully'
+            message: 'Driver profile and user details updated successfully'
         });
     } catch (err) {
         await client.query('ROLLBACK');
-        console.error('❌ Error updating driver profile:', err.message);
+        console.error('❌ Error updating profile:', err.message);
         res.status(500).json({ status: false, message: err.message });
     } finally {
         client.release();
     }
 };
+
 
 exports.getBookings = async (req, res) => {
     const user_id = req.user?.userId; // from auth middleware
