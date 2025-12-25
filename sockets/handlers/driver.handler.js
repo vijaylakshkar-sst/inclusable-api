@@ -207,12 +207,30 @@ module.exports = (io, socket, driverId) => {
           stripeCustomerId
         );
 
-        const paymentMethodId =
+        let paymentMethodId =
           customer.invoice_settings.default_payment_method;
 
+        // 🔁 Fallback: get latest saved card
         if (!paymentMethodId) {
-          throw new Error("Customer has no default payment method");
-        }
+          const paymentMethods = await stripe.paymentMethods.list({
+            customer: customer.id,
+            type: "card",
+            limit: 1,
+          });
+
+          if (!paymentMethods.data.length) {
+            throw new Error("No card found. Please add a payment method.");
+          }
+
+          paymentMethodId = paymentMethods.data[0].id;
+
+          // ✅ Set as default for future rides
+          await stripe.customers.update(customer.id, {
+            invoice_settings: {
+              default_payment_method: paymentMethodId,
+            },
+          });
+        }        
 
         // 🔐 Generate 4-digit OTP
         const otp = Math.floor(1000 + Math.random() * 9000).toString();
@@ -225,6 +243,13 @@ module.exports = (io, socket, driverId) => {
           payment_method: paymentMethodId,
           confirm: true,
           capture_method: "manual",
+
+          // 🔥 IMPORTANT FIX
+          automatic_payment_methods: {
+            enabled: true,
+            allow_redirects: "never",
+          },
+
           description: `Ride booking hold - ${bookingId}`,
           metadata: {
             bookingId,
@@ -237,12 +262,14 @@ module.exports = (io, socket, driverId) => {
           `UPDATE cab_bookings
          SET driver_id = $1,
              payment_intent_id = $2,
-             otp = $3,
+             booking_otp = $3,
              status = 'accepted',
              updated_at = NOW()
          WHERE id = $4`,
           [driverId, paymentIntent.id, otp, bookingId]
         );
+
+        socket.join(`booking:${bookingId}`);
 
         await client.query("COMMIT");
 
@@ -356,6 +383,10 @@ module.exports = (io, socket, driverId) => {
        WHERE id=$1 AND booking_otp=$2`,
         [bookingId, otp]
       );
+      console.log(res);
+      console.log(bookingId);
+      
+      
 
       if (res.rowCount === 0) throw new Error("Invalid OTP");
 
@@ -410,6 +441,13 @@ module.exports = (io, socket, driverId) => {
        WHERE id=$1`,
         [bookingId]
       );
+
+       await pool.query(
+          `UPDATE drivers
+         SET is_available = true
+         WHERE id = $1`,
+          [driverId]
+        );
 
       // 🔥 EMIT TO BOOKING ROOM (USER + DRIVER)
       io.to(`booking:${bookingId}`).emit("completeRide:success", {
