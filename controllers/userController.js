@@ -623,6 +623,7 @@ exports.login = async (req, res) => {
       profile_image: user.profile_image,
       date_of_birth: user.date_of_birth,
       gender: user.gender,
+      stripe_customer_id: user.stripe_customer_id,
       stripe_account_status:
         user.stripe_account_status === '3'
           ? 'Active'
@@ -1323,6 +1324,7 @@ exports.getProfile = async (req, res) => {
         business_overview,
         event_types,
         stripe_account_status,
+        stripe_customer_id,
         accessibility
       FROM users 
       WHERE id = $1`,
@@ -1428,6 +1430,7 @@ exports.getProfile = async (req, res) => {
       updated_at: user.updated_at,
       business_details: companyDetails, // Only if company
       ndis_information: ndisInfo, // Null if no record found
+      stripe_customer_id: user.stripe_customer_id,
     };
 
     res.json({ status: true, data: response });

@@ -12,6 +12,7 @@ router.get('/cab-track/:booking_id', auth, userCabController.trackDriver);
 router.get('/cab-types', auth, userCabController.cabTypes);
 router.post("/rating-submit", auth, userCabController.submitDriverRating );
 router.post("/setup-intent", auth,  userCabController.createSetupIntent);
-router.post("/store-payment-method", auth, userCabController.savePaymentMethod);
+router.post("/payment-confirm", auth, userCabController.confirmSetupIntent);
+router.get("/cards-list", auth, userCabController.getCardsList);
 
 module.exports = router;

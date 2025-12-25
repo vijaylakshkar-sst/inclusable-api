@@ -37,6 +37,13 @@ module.exports = function initSocket(server) {
       }
     }
 
+      /* ================= BOOKING ROOM (🔥 FIX) ================= */
+    socket.on("booking:join", ({ bookingId }) => {
+      if (!bookingId) return;
+      socket.join(`booking:${bookingId}`);
+      console.log(`📦 Socket ${socket.id} joined booking:${bookingId}`);
+    });
+
     driverHandler(io, socket, driverId);
     bookingHandler(io, socket);
     userHandler(io, socket);

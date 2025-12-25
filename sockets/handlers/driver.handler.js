@@ -1,7 +1,7 @@
 const pool = require("../../dbconfig");
 const store = require("../socketStore");
-
-module.exports = (io, socket) => {
+const stripe = require("../../stripe");
+module.exports = (io, socket, driverId) => {
 
   // ================================
   // DRIVER ONLINE
@@ -135,9 +135,9 @@ module.exports = (io, socket) => {
     }
   });
 
-  // ======================================
-  // 🚖 DRIVER RIDE ACTION (ACCEPT / IGNORE / CANCEL)
-  // ======================================
+  // // ======================================
+  // // 🚖 DRIVER RIDE ACTION (ACCEPT / IGNORE / CANCEL)
+  // // ======================================
   socket.on("rideAction", async ({ bookingId, action }) => {
     const userId = socket.user?.userId;
 
@@ -147,9 +147,13 @@ module.exports = (io, socket) => {
       });
     }
 
+    const client = await pool.connect();
+
     try {
-      // ✅ Get driver
-      const driverRes = await pool.query(
+      await client.query("BEGIN");
+
+      // 🔹 Get driver
+      const driverRes = await client.query(
         "SELECT id FROM drivers WHERE user_id = $1 LIMIT 1",
         [userId]
       );
@@ -161,8 +165,8 @@ module.exports = (io, socket) => {
       const driverId = driverRes.rows[0].id;
 
       // 🔒 Lock booking row
-      const bookingRes = await pool.query(
-        `SELECT status
+      const bookingRes = await client.query(
+        `SELECT status, user_id, estimated_fare
        FROM cab_bookings
        WHERE id = $1
        FOR UPDATE`,
@@ -173,71 +177,81 @@ module.exports = (io, socket) => {
         throw new Error("Booking not found");
       }
 
-      const currentStatus = bookingRes.rows[0].status;
+      const { status: currentStatus, user_id, estimated_fare } =
+        bookingRes.rows[0];
 
-      // ======================
-      // ✅ ACCEPT BOOKING
-      // ======================
+      /* =====================================================
+         ✅ ACCEPT BOOKING
+      ===================================================== */
       if (action === "accept") {
         if (currentStatus !== "pending") {
           throw new Error("Booking not available for acceptance");
         }
 
-        // 🔻 fetch booking details
-        const bookingDetail = await pool.query(
-          `SELECT user_id, estimated_fare FROM cab_bookings WHERE id=$1`,
-          [bookingId]
-        );
-
-        const { user_id, estimated_fare } = bookingDetail.rows[0];
-
-        // 🔻 fetch payment method from DB
-        const pmRes = await pool.query(
-          `SELECT payment_method_id, customer_id 
-            FROM stripe_payment_methods 
-            WHERE user_id=$1 LIMIT 1`,
+        // 🔹 Get Stripe customer id
+        const userRes = await client.query(
+          `SELECT stripe_customer_id FROM users WHERE id = $1`,
           [user_id]
         );
 
-        if (!pmRes.rows.length) {
-          throw new Error("Customer has no saved payment method");
+        if (
+          !userRes.rows.length ||
+          !userRes.rows[0].stripe_customer_id
+        ) {
+          throw new Error("Stripe customer not found");
         }
 
-        const paymentMethodId = pmRes.rows[0].payment_method_id;
-        const stripeCustomerId = pmRes.rows[0].customer_id;
+        const stripeCustomerId = userRes.rows[0].stripe_customer_id;
 
-        // 🔻 Block payment using Stripe
-        const paymentIntent = await stripe.paymentIntents.create({
-        amount: Math.round(estimated_fare * 100), // example 25.99 AUD -> 2599 cents
-        currency: "aud",                         // 👈 AUD here
-        customer: stripeCustomerId,
-        payment_method: paymentMethodId,
-        confirm: true,
-        capture_method: "manual",   // hold only
-        description: `Ride booking hold for booking: ${bookingId}`,
-        metadata: {
-          bookingId,
-          customer_id,
-          driverId
-        }
-      });
-
-        // 🔻 store paymentIntentId in bookings table
-        await pool.query(
-          `UPDATE cab_bookings
-            SET driver_id=$1,
-                payment_intent_id=$2,
-                status='accepted',
-                updated_at=NOW()
-            WHERE id=$3`,
-          [driverId, paymentIntent.id, bookingId]
+        const customer = await stripe.customers.retrieve(
+          stripeCustomerId
         );
+
+        const paymentMethodId =
+          customer.invoice_settings.default_payment_method;
+
+        if (!paymentMethodId) {
+          throw new Error("Customer has no default payment method");
+        }
+
+        // 🔐 Generate 4-digit OTP
+        const otp = Math.floor(1000 + Math.random() * 9000).toString();
+
+        // 💳 Create Stripe AUTH (manual capture)
+        const paymentIntent = await stripe.paymentIntents.create({
+          amount: Math.round(estimated_fare * 100),
+          currency: "aud",
+          customer: customer.id,
+          payment_method: paymentMethodId,
+          confirm: true,
+          capture_method: "manual",
+          description: `Ride booking hold - ${bookingId}`,
+          metadata: {
+            bookingId,
+            driverId,
+          },
+        });
+
+        // 🔻 Update booking
+        await client.query(
+          `UPDATE cab_bookings
+         SET driver_id = $1,
+             payment_intent_id = $2,
+             otp = $3,
+             status = 'accepted',
+             updated_at = NOW()
+         WHERE id = $4`,
+          [driverId, paymentIntent.id, otp, bookingId]
+        );
+
+        await client.query("COMMIT");
 
         socket.emit("rideAction:success", {
           bookingId,
           action: "accepted",
+          otp, // 🔐 send to driver app
           payment_intent_id: paymentIntent.id,
-          payment_status: paymentIntent.status   // should be requires_capture
+          payment_status: paymentIntent.status, // requires_capture
         });
 
         io.to(`booking:${bookingId}`).emit("booking:accepted", {
@@ -245,23 +259,33 @@ module.exports = (io, socket) => {
           driverId,
         });
 
+        return;
       }
 
-      // ======================
-      // ❌ IGNORE BOOKING
-      // ======================
+      /* =====================================================
+         ❌ IGNORE BOOKING
+      ===================================================== */
       if (action === "ignore") {
         if (currentStatus !== "pending") {
           throw new Error("Booking cannot be ignored");
         }
 
-        await pool.query(
+        await client.query(
           `UPDATE cab_bookings
          SET status = 'cancelled',
              updated_at = NOW()
          WHERE id = $1`,
           [bookingId]
         );
+
+        await client.query(
+          `UPDATE drivers
+         SET is_available = true
+         WHERE id = $1`,
+          [driverId]
+        );
+
+        await client.query("COMMIT");
 
         socket.emit("rideAction:success", {
           bookingId,
@@ -271,23 +295,34 @@ module.exports = (io, socket) => {
         io.to(`booking:${bookingId}`).emit("booking:ignored", {
           bookingId,
         });
+
+        return;
       }
 
-      // ======================
-      // 🚫 CANCEL RIDE (AFTER ACCEPTED)
-      // ======================
+      /* =====================================================
+         🚫 CANCEL RIDE (AFTER ACCEPT)
+      ===================================================== */
       if (action === "cancel") {
         if (!["accepted", "in_progress"].includes(currentStatus)) {
-          throw new Error("Ride cannot be cancelled at this stage");
+          throw new Error("Ride cannot be cancelled");
         }
 
-        await pool.query(
+        await client.query(
           `UPDATE cab_bookings
          SET status = 'cancelled',
              updated_at = NOW()
          WHERE id = $1`,
           [bookingId]
         );
+
+        await client.query(
+          `UPDATE drivers
+         SET is_available = true
+         WHERE id = $1`,
+          [driverId]
+        );
+
+        await client.query("COMMIT");
 
         socket.emit("rideAction:success", {
           bookingId,
@@ -299,11 +334,14 @@ module.exports = (io, socket) => {
           cancelledBy: "driver",
         });
       }
-
     } catch (err) {
+      await client.query("ROLLBACK");
+
       socket.emit("rideAction:error", {
-        message: err.message,
+        message: err.message || "Ride action failed",
       });
+    } finally {
+      client.release();
     }
   });
 
@@ -314,14 +352,19 @@ module.exports = (io, socket) => {
     try {
       const res = await pool.query(
         `UPDATE cab_bookings
-         SET booking_verified=true, status='in_progress'
-         WHERE id=$1 AND booking_otp=$2`,
+       SET booking_verified=true, status='in_progress'
+       WHERE id=$1 AND booking_otp=$2`,
         [bookingId, otp]
       );
 
       if (res.rowCount === 0) throw new Error("Invalid OTP");
 
-      socket.emit("verifyOtp:success", { bookingId });
+      // 🔥 BOTH USER + DRIVER
+      io.to(`booking:${bookingId}`).emit("verifyOtp:success", {
+        bookingId,
+        status: "in_progress"
+      });
+
     } catch (err) {
       socket.emit("verifyOtp:error", { message: err.message });
     }
@@ -332,12 +375,10 @@ module.exports = (io, socket) => {
   // ===============================
   socket.on("completeRide", async ({ bookingId, distance_km, total_fare }) => {
     try {
-
-      // get the booking
       const bookingRes = await pool.query(
         `SELECT payment_intent_id 
-        FROM cab_bookings
-        WHERE id=$1`,
+       FROM cab_bookings
+       WHERE id=$1`,
         [bookingId]
       );
 
@@ -349,11 +390,10 @@ module.exports = (io, socket) => {
       if (!paymentIntentId)
         throw new Error("No payment intent found for this booking");
 
-
-      // update booking first
+      // update booking
       await pool.query(
         `UPDATE cab_bookings
-          SET status='completed',
+       SET status='completed',
            distance_km=COALESCE($1,distance_km),
            estimated_fare=COALESCE($2,estimated_fare),
            updated_at=NOW()
@@ -361,10 +401,9 @@ module.exports = (io, socket) => {
         [distance_km, total_fare, bookingId]
       );
 
-      // ========= CAPTURE PAYMENT =========
+      // capture payment
       const stripeRes = await stripe.paymentIntents.capture(paymentIntentId);
 
-      // update after successful payment
       await pool.query(
         `UPDATE cab_bookings
        SET payment_status='paid'
@@ -372,26 +411,30 @@ module.exports = (io, socket) => {
         [bookingId]
       );
 
-      socket.emit("completeRide:success", {
+      // 🔥 EMIT TO BOOKING ROOM (USER + DRIVER)
+      io.to(`booking:${bookingId}`).emit("completeRide:success", {
         bookingId,
         amount: total_fare,
         payment_status: stripeRes.status,
-        message: "Ride completed + payment captured"
+        message: "Ride completed & payment captured"
       });
 
     } catch (err) {
-      console.log(err);
+      console.error(err);
       socket.emit("completeRide:error", { message: err.message });
     }
   });
   socket.on("currentLocation", async ({ driverId, lat, lng }) => {
     try {
-      await pool.query(
+      const res = await pool.query(
         `UPDATE drivers
          SET current_lat = $1, current_lng = $2, updated_at = NOW()
          WHERE id = $3`,
         [lat, lng, driverId]
       );
+      console.log("driverId:", driverId, typeof driverId);
+
+      console.log(res);
 
       io.emit(`driver:${driverId}:location`, { lat, lng });
     } catch (err) {

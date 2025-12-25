@@ -281,12 +281,12 @@ exports.bookCab = async (req, res) => {
           FOR UPDATE;
         `;
 
-        const params = [
-          cab_type_id,                     // $1
-          disability_features_id || null,  // $2
-          pickup_lat,                      // $3
-          pickup_lng                       // $4
-        ];
+      const params = [
+        cab_type_id,                     // $1
+        disability_features_id || null,  // $2
+        pickup_lat,                      // $3
+        pickup_lng                       // $4
+      ];
 
       const driverRes = await client.query(driverQuery, params);
 
@@ -574,96 +574,150 @@ exports.submitDriverRating = async (req, res) => {
 
 exports.createSetupIntent = async (req, res) => {
   try {
-    const userId = req.user?.userId;
+    const userId = req.user.userId;
     const { stripe_key } = req.body;
 
-    if (!stripe_key || !["test", "production"].includes(stripe_key)) {
-      return res.status(400).json({
-        status: false,
-        message: "Invalid environment. Use 'test' or 'production'."
-      });
+    if (!["test", "production"].includes(stripe_key)) {
+      return res.status(400).json({ status: false, message: "Invalid environment" });
     }
 
-    const StripeQuery = `
-      SELECT id, environment, publishable_key, secret_key
-      FROM stripe_keys
-      WHERE environment = $1 LIMIT 1
-    `;
-    const resultStripeKey = await pool.query(StripeQuery, [stripe_key]);
+    const { rows } = await pool.query(
+      `SELECT publishable_key, secret_key 
+       FROM stripe_keys 
+       WHERE environment=$1 LIMIT 1`,
+      [stripe_key]
+    );
 
-    if (resultStripeKey.rows.length === 0) {
-      return res.status(404).json({
-        status: false,
-        message: `No Stripe keys found for environment: ${stripe_key}`
-      });
+    if (!rows.length) {
+      return res.status(404).json({ status: false, message: "Stripe key not found" });
     }
 
-    const stripe = require("stripe")(resultStripeKey.rows[0].secret_key);
+    const stripe = require("stripe")(rows[0].secret_key);
 
-    // get or create Stripe customer
-    let customer_id;
+    // Get or create customer
+    let customerId;
     const userRes = await pool.query(
       "SELECT stripe_customer_id FROM users WHERE id=$1",
       [userId]
     );
 
     if (userRes.rows[0]?.stripe_customer_id) {
-      customer_id = userRes.rows[0].stripe_customer_id;
+      customerId = userRes.rows[0].stripe_customer_id;
     } else {
       const customer = await stripe.customers.create({ metadata: { userId } });
-      customer_id = customer.id;
+      customerId = customer.id;
       await pool.query(
         "UPDATE users SET stripe_customer_id=$1 WHERE id=$2",
-        [customer_id, userId]
+        [customerId, userId]
       );
     }
 
-    // create setup intent
-    const setupIntent = await stripe.setupIntents.create({ customer: customer_id });
+    const setupIntent = await stripe.setupIntents.create({
+      customer: customerId,
+      payment_method_types: ["card"],
+    });
 
-    // create ephemeral key correctly
     const ephemeralKey = await stripe.ephemeralKeys.create(
-      { customer: customer_id },
-      { apiVersion: "2025-12-15.clover" } // ← use your exact Stripe API version
+      { customer: customerId },
+      { apiVersion: "2023-10-16" } // ✅ valid API version
     );
 
     res.json({
       status: true,
       data: {
-        stripeKey: resultStripeKey.rows[0],
+        publishableKey: rows[0].publishable_key,
+        customerId,
         clientSecret: setupIntent.client_secret,
-        ephemeralKey: ephemeralKey.secret
-      }
+        ephemeralKey: ephemeralKey.secret,
+      },
     });
   } catch (err) {
-    console.error("Stripe error:", err);
-    res.status(500).json({
-      status: false,
-      message: "Internal server error",
-      error: err.message
-    });
+    console.error(err);
+    res.status(500).json({ status: false, message: err.message });
   }
 };
 
-exports.savePaymentMethod = async(req,res)=>{
-  const userId = req.user?.userId;
+exports.confirmSetupIntent = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { setup_intent_id, stripe_key } = req.body;
 
-  const { customerId, paymentMethodId } = req.body;
+    const { rows: keyRows } = await pool.query(
+      `SELECT secret_key FROM stripe_keys WHERE environment=$1 LIMIT 1`,
+      [stripe_key]
+    );
 
-  const pm = await stripe.paymentMethods.retrieve(paymentMethodId);
+    const stripe = require("stripe")(keyRows[0].secret_key);
 
-  await pool.query(
-    `INSERT INTO stripe_payment_methods
-     (user_id, customer_id, payment_method_id, brand, last4)
-     VALUES ($1, $2, $3, $4, $5)`,
-    [
-      userId,
-      customerId,
-      paymentMethodId,
-      pm.card.brand,
-      pm.card.last4,
-    ]
-  );
+    const { rows } = await pool.query(
+      "SELECT stripe_customer_id FROM users WHERE id=$1",
+      [userId]
+    );
 
-  res.json({ success:true });
-}
+    const customerId = rows[0].stripe_customer_id;
+
+    const setupIntent = await stripe.setupIntents.retrieve(setup_intent_id);
+
+    if (!setupIntent.payment_method) {
+      return res.status(400).json({
+        status: false,
+        message: "SetupIntent not completed",
+      });
+    }
+
+    const newPm = await stripe.paymentMethods.retrieve(
+      setupIntent.payment_method
+    );
+
+    const existingCards = await stripe.paymentMethods.list({
+      customer: customerId,
+      type: "card",
+    });
+
+    const duplicate = existingCards.data.find(
+      pm =>
+        pm.card?.fingerprint === newPm.card?.fingerprint &&
+        pm.id !== newPm.id
+    );
+
+    if (duplicate) {
+      await stripe.paymentMethods.detach(newPm.id);
+
+      return res.json({
+        status: false,
+        message: "This card already exists",
+      });
+    }
+
+    // Optional: set default card
+    await stripe.customers.update(customerId, {
+      invoice_settings: { default_payment_method: newPm.id },
+    });
+
+    res.json({ status: true, message: "Card saved successfully" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ status: false, message: err.message });
+  }
+};
+
+exports.getCardsList = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+
+    const { rows } = await pool.query(
+      "SELECT stripe_customer_id FROM users WHERE id=$1",
+      [userId]
+    );
+
+    const cards = await stripe.paymentMethods.list({
+      customer: rows[0].stripe_customer_id,
+      type: "card",
+    });
+
+    res.json({ status: true, data: cards.data });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ status: false, message: err.message });
+  }
+};
