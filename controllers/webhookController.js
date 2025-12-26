@@ -1,7 +1,7 @@
 const pool = require('../dbconfig');
 const stripe = require('../stripe');
-const { sendNotificationToBusiness } = require("../hooks/notification");
-
+const { sendNotificationToBusiness,sendNotificationToDriver } = require("../hooks/notification");
+const BASE_IMAGE_URL = process.env.BASE_IMAGE_URL;
 exports.handleStripeWebhook = async (req, res) => {
   const sig = req.headers['stripe-signature'];
   const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
@@ -138,52 +138,52 @@ exports.handleStripeWebhook = async (req, res) => {
     }
 
     // 🆕 Optional: Handle other cleanup events like canceled, timed out
-   else if (event.type === 'payment_intent.canceled') {
-    const paymentIntent = event.data.object;
-    const paymentIntentId = paymentIntent.id;
+    else if (event.type === 'payment_intent.canceled') {
+      const paymentIntent = event.data.object;
+      const paymentIntentId = paymentIntent.id;
 
-    await client.query('BEGIN');
+      await client.query('BEGIN');
 
-    const txnData = await client.query(
-      `SELECT booking_id, event_id FROM transactions WHERE payment_intent_id = $1`,
-      [paymentIntentId]
-    );
-
-    if (txnData.rows.length > 0) {
-      const { booking_id, event_id } = txnData.rows[0];
-
-      const bookingInfo = await client.query(
-        `SELECT number_of_tickets FROM event_bookings WHERE id = $1`,
-        [booking_id]
-      );
-
-      const number_of_tickets = bookingInfo.rows[0]?.number_of_tickets || 0;
-
-      // Restore seats
-      await client.query(
-        `UPDATE company_events 
-        SET total_available_seats = total_available_seats + $1,
-            updated_at = NOW()
-        WHERE id = $2`,
-        [number_of_tickets, event_id]
-      );
-
-      // Update statuses
-      await client.query(
-        `UPDATE event_bookings SET status = 'cancelled' WHERE id = $1`,
-        [booking_id]
-      );
-
-      await client.query(
-        `UPDATE transactions SET status = 'cancelled' WHERE payment_intent_id = $1`,
+      const txnData = await client.query(
+        `SELECT booking_id, event_id FROM transactions WHERE payment_intent_id = $1`,
         [paymentIntentId]
       );
 
-      console.log(`🚫 Payment canceled — restored ${number_of_tickets} seats for event ${event_id}`);
-    }
+      if (txnData.rows.length > 0) {
+        const { booking_id, event_id } = txnData.rows[0];
 
-    await client.query('COMMIT');
-  }
+        const bookingInfo = await client.query(
+          `SELECT number_of_tickets FROM event_bookings WHERE id = $1`,
+          [booking_id]
+        );
+
+        const number_of_tickets = bookingInfo.rows[0]?.number_of_tickets || 0;
+
+        // Restore seats
+        await client.query(
+          `UPDATE company_events 
+        SET total_available_seats = total_available_seats + $1,
+            updated_at = NOW()
+        WHERE id = $2`,
+          [number_of_tickets, event_id]
+        );
+
+        // Update statuses
+        await client.query(
+          `UPDATE event_bookings SET status = 'cancelled' WHERE id = $1`,
+          [booking_id]
+        );
+
+        await client.query(
+          `UPDATE transactions SET status = 'cancelled' WHERE payment_intent_id = $1`,
+          [paymentIntentId]
+        );
+
+        console.log(`🚫 Payment canceled — restored ${number_of_tickets} seats for event ${event_id}`);
+      }
+
+      await client.query('COMMIT');
+    }
 
   } catch (err) {
     await client.query('ROLLBACK');
@@ -217,12 +217,47 @@ exports.handleCabBookingWebhook = async (req, res) => {
     case "payment_intent.succeeded":
       console.log("💰 Ride payment captured:", intent.id);
 
-      await pool.query(
+    const bookingData =  await pool.query(
         `UPDATE cab_bookings
          SET payment_status='paid'
-         WHERE payment_intent_id=$1`,
+         WHERE payment_intent_id=$1
+         RETURNING id, user_id, driver_id, status, payment_status, created_at, updated_at, deleted_at`,
         [intent.id]
       );
+
+      const booking = bookingData.rows[0];
+      const driverId = booking.driver_id;
+
+      const driverResult = await client.query(
+        'SELECT id,user_id FROM drivers WHERE id = $1 LIMIT 1',
+        [driverId]
+      );
+
+      if (driverResult.rowCount === 0) {
+        return res.status(404).json({
+          status: false,
+          message: 'Driver not found for this user'
+        });
+      }
+
+      const driver_user_id = driverResult.rows[0].user_id;
+
+
+      if (driverId) {
+        await sendNotificationToDriver({
+          driverUserId: driver_user_id,
+          title: 'Payment recieved!',
+          message: `Booking Payment is recieved.`,
+          type: 'Booking',
+          booking_id: booking.id,
+          image_url: `${BASE_IMAGE_URL}/icons/check-xmark.png`,
+          bg_color: '#DF1D17',
+          data: {
+            screen: 'BookingDetails',
+            sound: 'default',
+          }
+        });
+      }
 
       break;
 
@@ -240,7 +275,7 @@ exports.handleCabBookingWebhook = async (req, res) => {
 
     default:
       console.log(`Unhandled event type ${event.type}`);
-  } 
+  }
 
   res.sendStatus(200);
 };

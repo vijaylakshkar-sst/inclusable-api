@@ -14,7 +14,7 @@ router.post('/users/additional-details', auth, uploadFiles, userController.addAd
 router.get('/users/onboarding-status', auth, userController.checkOnboardingCompletion);
 router.get('/users/notifications', auth, userController.getNotifications);
 router.post('/send-otp', userController.sendOTP);
-
+router.post("/chat/send",userController.sendChatNotification);
 
 router.get('/profile', auth, userController.getProfile);
 

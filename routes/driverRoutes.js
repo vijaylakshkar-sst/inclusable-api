@@ -12,6 +12,7 @@ router.post('/profile/add',auth, driverDocumentMulter, driverController.addProfi
 router.get('/profile', auth, driverController.getProfile);
 router.put('/profile/update', auth, driverDocumentMulter, driverController.updateProfile);
 router.get('/dashboard', auth, driverController.getDashboard);
+router.post("/rating-submit", auth, driverController.submitUserRating );
 // router.put('/status', auth, driverController.updateStatus);
 
 // Accept booking

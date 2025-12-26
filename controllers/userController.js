@@ -7,7 +7,7 @@ const jwt = require('jsonwebtoken');
 const { stat } = require('fs');
 const fs = require('fs');
 const stripe = require('../stripe');
-
+const { chatNotification } = require('../hooks/notification');
 
 const templatePath = path.join(__dirname, '../emailTemplates/otpEmailTemplate.html');
 
@@ -343,7 +343,7 @@ exports.verifyEmail = async (req, res) => {
 
       if (fcm_token && fcm_token.trim() !== '') {
         await pool.query('UPDATE users SET fcm_token = $1 WHERE id = $2', [fcm_token, user.id]);
-      }     
+      }
 
       const token = jwt.sign({ userId: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
       res.json({
@@ -1874,5 +1874,39 @@ exports.termCondition = async (req, res) => {
     res.json({ status: true, data: result.rows });
   } catch (err) {
     res.status(500).json({ status: false, error: err.message });
+  }
+};
+
+
+exports.sendChatNotification = async (req, res) => {
+  const { title, message, user_id, id = null } = req.body;
+
+  if (!title || !message || !user_id) {
+    return res.status(400).json({
+      status: false,
+      message: "title, message and user_id are required",
+    });
+  }
+
+  try {
+    // ✅ CORRECT CALL
+    await chatNotification({
+      title,
+      message,
+      user_id,
+      id,
+    });
+
+    res.status(200).json({
+      status: true,
+      message: "Notification sent successfully",
+    });
+
+  } catch (err) {
+    console.error("❌ Send Notification Error:", err.message);
+    res.status(500).json({
+      status: false,
+      message: "Failed to send notification",
+    });
   }
 };

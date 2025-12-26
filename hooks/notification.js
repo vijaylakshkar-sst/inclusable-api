@@ -37,7 +37,7 @@ exports.sendNotification = async ({
 
     // Step 1️⃣: Get all user FCM tokens
     const fcmResult = await client.query(
-        `
+      `
         SELECT id, fcm_token 
         FROM users 
         WHERE fcm_token IS NOT NULL 
@@ -45,8 +45,8 @@ exports.sendNotification = async ({
           AND role = $1
           AND deleted_at IS NULL
         `,
-        [target]
-      );
+      [target]
+    );
 
     const users = fcmResult.rows;
     if (users.length === 0) {
@@ -113,7 +113,7 @@ exports.sendNotificationToBusiness = async ({
   type = 'Booking',
   target = 'Company',
   id = '',
-  booking_id=''
+  booking_id = ''
 }) => {
   if (!title || !message || !businessUserId) {
     console.error('❌ Notification Error: Missing required fields.');
@@ -143,7 +143,7 @@ exports.sendNotificationToBusiness = async ({
       INSERT INTO notifications (user_id, title, message, type, target, company_event_id,booking_id)
       VALUES ($1, $2, $3, $4, $5, $6,$7)
       `,
-      [businessUserId, title, message, type, target, id,booking_id]
+      [businessUserId, title, message, type, target, id, booking_id]
     );
     console.log('✅ Notification stored in DB for business user.');
 
@@ -184,8 +184,8 @@ exports.sendNotificationToDriver = async ({
   image_url = '',
   bg_color = '#ffffff',
   data = {} // optional additional payload
-}) => {  
-  
+}) => {
+
   if (!title || !message || !driverUserId) {
     console.error('❌ Driver Notification Error: Missing required fields.');
     return;
@@ -328,6 +328,71 @@ exports.sendNotificationToUser = async ({
 
   } catch (err) {
     console.error('❌ Notification Error:', err.message);
+  } finally {
+    client.release();
+  }
+};
+
+
+
+exports.chatNotification = async ({
+  title,
+  message,
+  user_id,   // 🔥 specific user
+  id = null
+}) => {
+  if (!title || !message || !user_id) {
+    console.error('❌ Notification Error: Missing required fields');
+    return;
+  }
+
+  const client = await pool.connect();
+
+  try {
+    console.log(`🚀 Fetching FCM token for user_id: ${user_id}`);
+
+    // 1️⃣ Get user's FCM token
+    const fcmRes = await client.query(
+      `
+      SELECT fcm_token
+      FROM users
+      WHERE id = $1
+        AND fcm_token IS NOT NULL
+        AND fcm_token <> ''
+        AND deleted_at IS NULL
+      `,
+      [user_id]
+    );
+
+    if (!fcmRes.rows.length) {
+      console.warn('⚠️ No FCM token found for this user');
+      return;
+    }
+
+    const token = fcmRes.rows[0].fcm_token;
+
+    // 2️⃣ Prepare FCM payload
+    const payload = {
+      notification: {
+        title,
+        body: message,
+      },
+      data: {
+        type: 'chat',
+        id: id ? String(id) : '',
+      },
+      token, // ✅ SINGLE USER
+    };
+
+    console.log('📦 Sending FCM payload:', payload);
+
+    // 3️⃣ Send push notification
+    const response = await admin.messaging().send(payload);
+
+    console.log('✅ Push notification sent:', response);
+
+  } catch (err) {
+    console.error('❌ Chat Notification Error:', err.message);
   } finally {
     client.release();
   }
