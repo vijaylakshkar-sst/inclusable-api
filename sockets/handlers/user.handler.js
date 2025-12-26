@@ -1,4 +1,5 @@
 const pool = require("../../dbconfig");
+const BASE_IMAGE_URL = process.env.BASE_IMAGE_URL;
 
 module.exports = (io, socket) => {
 
@@ -146,14 +147,51 @@ module.exports = (io, socket) => {
       });
 
       // update DB
-      await pool.query(
+      const bookingData = await pool.query(
         `UPDATE cab_bookings
        SET status='cancelled',
            payment_status='partial_paid',
            updated_at=NOW()
-       WHERE id=$1`,
+       WHERE id=$1
+       RETURNING id, user_id, driver_id, status, payment_status, created_at, updated_at, deleted_at`,
         [bookingId]
       );
+
+
+      const booking = bookingData.rows[0];
+      const driverId = booking.driver_id;
+
+      const driverResult = await client.query(
+        'SELECT id,user_id FROM drivers WHERE id = $1 LIMIT 1',
+        [driverId]
+      );
+
+      if (driverResult.rowCount === 0) {
+        return res.status(404).json({
+          status: false,
+          message: 'Driver not found for this user'
+        });
+      }
+
+      const driver_user_id = driverResult.rows[0].user_id;
+
+
+      if (driverId) {
+        await sendNotificationToDriver({
+          driverUserId: driver_user_id,
+          title: 'Booking Cancelled',
+          message: `Booking #${booking.id} has been cancelled.`,
+          type: 'Booking',
+          booking_id: booking.id,
+          image_url: `${BASE_IMAGE_URL}/icons/check-xmark.png`,
+          bg_color: '#DF1D17',
+          data: {
+            screen: 'BookingDetails',
+            sound: 'default',
+          }
+        });
+      }
+
 
       socket.emit("cancelRideByUser:success", {
         bookingId,
