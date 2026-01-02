@@ -16,6 +16,7 @@ module.exports = (io, socket) => {
           b.booking_otp,
 
           d.id AS driver_id,
+          d.user_id AS driver_user_id,
           d.vehicle_number,
           d.current_lat,
           d.current_lng,
@@ -76,6 +77,7 @@ module.exports = (io, socket) => {
         driver: {
           id: row.driver_id,
           name: row.driver_name,
+          driver_user_id: row.driver_user_id,
           phone_number: row.driver_phone,
           profile_image: userProfileImage,
           rating: row.driver_rating, // ⭐ REAL AVERAGE
