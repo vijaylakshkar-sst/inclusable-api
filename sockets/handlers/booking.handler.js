@@ -288,9 +288,20 @@ module.exports = (io, socket) => {
       // ===============================
       if (booking_type === 'instant') {
 
-       io.to(`booking:${booking.id}`).emit("booking:expired", {
-        booking_id: booking.id
-      });
+      //  io.to(`booking:${booking.id}`).emit("booking:expired", {
+      //   booking_id: booking.id
+      // });
+
+      const driverIds = new Set();
+
+      for (const driver of drivers) {
+        driverIds.add(driver.id);
+
+        io.to(`driver:${driver.id}`).emit("booking:new", driverPayload);
+      }
+
+      bookingDriversMap.set(booking.id, driverIds);
+      
 
         // ===============================
         // ⭐ 40-SECOND SEARCH TIMEOUT
