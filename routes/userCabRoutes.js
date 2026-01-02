@@ -14,5 +14,6 @@ router.post("/rating-submit", auth, userCabController.submitDriverRating );
 router.post("/setup-intent", auth,  userCabController.createSetupIntent);
 router.post("/payment-confirm", auth, userCabController.confirmSetupIntent);
 router.get("/cards-list", auth, userCabController.getCardsList);
+router.get("/my-rides", auth, userCabController.getMyRides);
 
 module.exports = router;

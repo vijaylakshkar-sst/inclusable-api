@@ -721,3 +721,50 @@ exports.getCardsList = async (req, res) => {
     res.status(500).json({ status: false, message: err.message });
   }
 };
+
+exports.getMyRides = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+
+    const { rows } = await pool.query(
+      `
+      SELECT 
+        cb.*,
+        u.full_name,
+        u.profile_image
+      FROM cab_bookings cb
+      JOIN users u ON u.id = cb.user_id
+      WHERE cb.user_id = $1
+        AND cb.status IN ('scheduled', 'completed')
+        AND cb.deleted_at IS NULL
+      ORDER BY
+        CASE
+          WHEN cb.status = 'scheduled' THEN 1
+          WHEN cb.status = 'completed' THEN 2
+        END,
+        COALESCE(cb.scheduled_time, cb.updated_at) DESC
+      `,
+      [userId]
+    );
+
+    // ✅ attach full image URL per ride
+    const data = rows.map(row => ({
+      ...row,
+      profile_image: row.profile_image
+        ? `${BASE_IMAGE_URL}/${row.profile_image}`
+        : null
+    }));
+
+    return res.json({
+      success: true,
+      data
+    });
+
+  } catch (err) {
+    console.error("❌ getMyRides error:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch ride history",
+    });
+  }
+};

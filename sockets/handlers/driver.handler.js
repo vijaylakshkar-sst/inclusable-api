@@ -2,6 +2,7 @@ const pool = require("../../dbconfig");
 const { sendNotificationToUser } = require("../../hooks/notification");
 const store = require("../socketStore");
 const stripe = require("../../stripe");
+const { bookingTimers,bookingDriversMap } = require("../bookingTimers");
 module.exports = (io, socket, driverId) => {
 
   // ================================
@@ -188,6 +189,13 @@ module.exports = (io, socket, driverId) => {
           throw new Error("Booking not available for acceptance");
         }
 
+        // 🟢 ⭐ NEW — cancel searching timeout
+        const t = bookingTimers?.get(bookingId);
+        if (t) {
+          clearTimeout(t);
+          bookingTimers.delete(bookingId);
+        }
+        
         // 🔹 Get Stripe customer id
         const userRes = await client.query(
           `SELECT stripe_customer_id FROM users WHERE id = $1`,
@@ -287,6 +295,8 @@ module.exports = (io, socket, driverId) => {
           target: "NDIS Member",
           booking_id: booking.id,
         });
+
+        bookingDriversMap.delete(bookingId);
 
         socket.join(`booking:${bookingId}`);
 

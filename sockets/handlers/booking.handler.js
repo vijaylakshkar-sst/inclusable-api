@@ -1,5 +1,7 @@
 const pool = require("../../dbconfig");
 const BASE_IMAGE_URL = process.env.BASE_IMAGE_URL;
+const { bookingTimers, bookingDriversMap } = require("../bookingTimers");
+
 module.exports = (io, socket) => {
 
   socket.on("booking:track", async ({ bookingId }) => {
@@ -52,7 +54,7 @@ module.exports = (io, socket) => {
 
       const row = result.rows[0];
 
-      
+
       // Absolute profile image URL
       const userProfileImage =
         row?.profile_image
@@ -171,33 +173,33 @@ module.exports = (io, socket) => {
 
       if (booking_type === 'instant') {
         const driverQuery = `
-          SELECT *
-          FROM (
-            SELECT d.id,
-              (
-                6371 * acos(
-                  cos(radians($3)) * cos(radians(d.current_lat)) *
-                  cos(radians(d.current_lng) - radians($4)) +
-                  sin(radians($3)) * sin(radians(d.current_lat))
-                )
-              ) AS distance
-            FROM drivers d
-            WHERE d.is_available = true
-              AND d.status = 'online'
-              AND d.cab_type_id = $1
-              AND d.current_lat IS NOT NULL
-              AND d.current_lng IS NOT NULL
-              AND (
-                $2::INT IS NULL OR EXISTS (
-                  SELECT 1
-                  FROM driver_disability_features ddf
-                  WHERE ddf.driver_id = d.id
-                    AND ddf.disability_feature_id = $2
-                )
+        SELECT *
+        FROM (
+          SELECT d.id,
+            (
+              6371 * acos(
+                cos(radians($3)) * cos(radians(d.current_lat)) *
+                cos(radians(d.current_lng) - radians($4)) +
+                sin(radians($3)) * sin(radians(d.current_lat))
               )
-          ) t
-          WHERE t.distance <= 5
-        `;
+            ) AS distance
+          FROM drivers d
+          WHERE d.is_available = true
+            AND d.status = 'online'
+            AND d.cab_type_id = $1
+            AND d.current_lat IS NOT NULL
+            AND d.current_lng IS NOT NULL
+            AND (
+              $2::INT IS NULL OR EXISTS (
+                SELECT 1
+                FROM driver_disability_features ddf
+                WHERE ddf.driver_id = d.id
+                  AND ddf.disability_feature_id = $2
+              )
+            )
+        ) t
+        WHERE t.distance <= 5
+      `;
 
         const driverRes = await client.query(driverQuery, [
           cab_type_id,
@@ -251,28 +253,24 @@ module.exports = (io, socket) => {
       // ===============================
       const userRes = await pool.query(
         `
-        SELECT 
-          u.id,
-          u.full_name,
-          u.profile_image,
-          u.phone_number
-        FROM users u
-        WHERE u.id = $1
-        `,
+      SELECT 
+        u.id,
+        u.full_name,
+        u.profile_image,
+        u.phone_number
+      FROM users u
+      WHERE u.id = $1
+      `,
         [user_id]
       );
 
       const user = userRes.rows[0];
 
-      // Absolute profile image URL
       const userProfileImage =
         user?.profile_image
           ? `${BASE_IMAGE_URL}/${user.profile_image}`
           : null;
 
-      // ===============================
-      // DRIVER PAYLOAD (SAFE & CLEAN)
-      // ===============================
       const driverPayload = {
         ...booking,
         user: {
@@ -287,9 +285,58 @@ module.exports = (io, socket) => {
       // BROADCAST TO ALL DRIVERS
       // ===============================
       if (booking_type === 'instant') {
-        for (const driver of drivers) {
-          io.to(`driver:${driver.id}`).emit('booking:new', driverPayload);
-        }
+
+       io.to(`booking:${booking.id}`).emit("booking:expired", {
+        booking_id: booking.id
+      });
+
+        // ===============================
+        // ⭐ 40-SECOND SEARCH TIMEOUT
+        // ===============================
+        const timeoutId = setTimeout(async () => {
+          try {
+            const timeoutClient = await pool.connect();
+
+            const result = await timeoutClient.query(
+              `UPDATE cab_bookings
+                SET status = 'cancelled',
+                    updated_at = NOW()
+                WHERE id = $1
+                  AND status = 'searching'
+                RETURNING id`,
+              [booking.id]
+            );
+
+            timeoutClient.release();
+
+            // ❌ Booking already accepted
+            if (!result.rowCount) return;
+
+            // 🔔 Notify user
+            socket.emit("booking:timeout", {
+              booking_id: booking.id,
+              message: "No driver accepted your ride"
+            });
+
+            // 🔥 REMOVE FROM ALL DRIVERS
+            const driverIds = bookingDriversMap.get(booking.id) || [];
+
+            for (const driverId of driverIds) {
+              io.to(`driver:${driverId}`).emit("booking:expired", {
+                booking_id: booking.id
+              });
+            }
+
+            bookingDriversMap.delete(booking.id);
+
+          } catch (err) {
+            console.error("❌ Booking timeout error:", err);
+          }
+
+          bookingTimers.delete(booking.id);
+        }, 40000);
+
+        bookingTimers.set(booking.id, timeoutId);
       }
 
       socket.emit('booking:confirmed', booking);
