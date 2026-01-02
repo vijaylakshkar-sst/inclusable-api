@@ -572,7 +572,8 @@ module.exports = (io, socket, driverId) => {
           `UPDATE cab_bookings
          SET status = 'cancelled',
              updated_at = NOW()
-         WHERE id = $1`,
+         WHERE id = $1
+         RETURNING *`,
           [bookingId]
         );
 
@@ -762,6 +763,8 @@ module.exports = (io, socket, driverId) => {
   });
   socket.on("currentLocation", async ({ driverId, lat, lng }) => {
     try {
+      console.log(driverId, lat, lng);
+      
       const res = await pool.query(
         `UPDATE drivers
          SET current_lat = $1, current_lng = $2, updated_at = NOW()

@@ -1,6 +1,6 @@
 const pool = require("../../dbconfig");
 const BASE_IMAGE_URL = process.env.BASE_IMAGE_URL;
-
+const stripe = require("../../stripe");
 module.exports = (io, socket) => {
 
   socket.on("user:cab-find", async ({ lat, lng, radius_km = 10 }) => {
@@ -161,7 +161,7 @@ module.exports = (io, socket) => {
       const booking = bookingData.rows[0];
       const driverId = booking.driver_id;
 
-      const driverResult = await client.query(
+      const driverResult = await pool.query(
         'SELECT id,user_id FROM drivers WHERE id = $1 LIMIT 1',
         [driverId]
       );
