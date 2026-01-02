@@ -1,6 +1,8 @@
 const pool = require("../../dbconfig");
 const BASE_IMAGE_URL = process.env.BASE_IMAGE_URL;
 const stripe = require("../../stripe");
+const { sendNotificationToDriver } = require("../../hooks/notification");
+
 module.exports = (io, socket) => {
 
   socket.on("user:cab-find", async ({ lat, lng, radius_km = 10 }) => {
@@ -174,8 +176,13 @@ module.exports = (io, socket) => {
       }
 
       const driver_user_id = driverResult.rows[0].user_id;
-
-
+      
+      // update driver status is_available-true
+      const cabDriverUpdate = await pool.query(
+        "UPDATE drivers SET is_available = true WHERE id = $1",
+        [driverId]
+      );
+      
       if (driverId) {
         await sendNotificationToDriver({
           driverUserId: driver_user_id,

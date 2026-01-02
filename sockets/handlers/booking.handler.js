@@ -11,16 +11,16 @@ module.exports = (io, socket) => {
         SELECT
           b.id AS booking_id,
           b.status,
-          b.otp,
+          b.booking_otp,
 
           d.id AS driver_id,
-          d.name AS driver_name,
-          d.profile_image,
           d.vehicle_number,
           d.current_lat,
           d.current_lng,
-
+          
+          u.full_name AS driver_name,
           u.phone_number AS driver_phone,
+          u.profile_image,
 
           c.name AS cab_type,
           c.thumbnail_url AS cab_image,
@@ -52,21 +52,34 @@ module.exports = (io, socket) => {
 
       const row = result.rows[0];
 
+      
+      // Absolute profile image URL
+      const userProfileImage =
+        row?.profile_image
+          ? `${BASE_IMAGE_URL}/${row.profile_image}`
+          : null;
+
+      const cabImageUrl =
+        row?.cab_image
+          ? `${BASE_IMAGE_URL}/${row.cab_image}`
+          : null;
+
+
       socket.emit("booking:initDetails", {
         booking: {
           id: row.booking_id,
           status: row.status,
-          otp: row.otp,
+          otp: row.booking_otp,
         },
         driver: {
           id: row.driver_id,
           name: row.driver_name,
           phone_number: row.driver_phone,
-          profile_image: row.profile_image,
+          profile_image: userProfileImage,
           rating: row.driver_rating, // ⭐ REAL AVERAGE
           vehicle_number: row.vehicle_number,
           cab_type: row.cab_type,
-          cab_image: row.cab_image,
+          cab_image: cabImageUrl,
           location: {
             lat: row.current_lat,
             lng: row.current_lng,
@@ -81,178 +94,6 @@ module.exports = (io, socket) => {
       });
     }
   });
-
-  // socket.on('cab:book', async (payload, callback) => {
-  //   const client = await pool.connect();
-
-  //   try {
-  //     await client.query('BEGIN');
-
-  //     const user_id = socket.user.userId;
-
-  //     const {
-  //       cab_type_id,
-  //       booking_type,
-  //       booking_mode,
-  //       pickup_address,
-  //       pickup_lat,
-  //       pickup_lng,
-  //       drop_address,
-  //       drop_lat,
-  //       drop_lng,
-  //       disability_features_id = null, // ✅ OPTIONAL
-  //       scheduled_time
-  //     } = payload;
-
-  //     // ✅ Basic validation
-  //     if (
-  //       !cab_type_id || !booking_type ||
-  //       !pickup_address || !pickup_lat || !pickup_lng ||
-  //       !drop_address || !drop_lat || !drop_lng
-  //     ) {
-  //       throw 'MISSING_FIELDS';
-  //     }
-
-  //     // ✅ Cab check
-  //     const cabRes = await client.query(
-  //       'SELECT * FROM cab_types WHERE id = $1',
-  //       [cab_type_id]
-  //     );
-  //     if (!cabRes.rowCount) throw 'CAB_NOT_FOUND';
-
-  //     const cabType = cabRes.rows[0];
-
-  //     // ✅ Distance calculation
-  //     const rad = Math.PI / 180;
-  //     const R = 6371;
-
-  //     const dLat = (drop_lat - pickup_lat) * rad;
-  //     const dLng = (drop_lng - pickup_lng) * rad;
-
-  //     const a =
-  //       Math.sin(dLat / 2) ** 2 +
-  //       Math.cos(pickup_lat * rad) *
-  //       Math.cos(drop_lat * rad) *
-  //       Math.sin(dLng / 2) ** 2;
-
-  //     const distance_km = +(R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)))).toFixed(2);
-  //     const estimated_fare = +(
-  //       (cabType.base_fare || 0) +
-  //       distance_km * cabType.standard_price
-  //     ).toFixed(2);
-
-  //     let driverId = null;
-
-  //     // 🔐 DRIVER ASSIGNMENT (DISABILITY-AWARE)
-  //     if (booking_type === 'instant') {
-
-  //       const driverQuery = `
-  //       SELECT d.id
-  //       FROM drivers d
-  //       WHERE d.is_available = true
-  //         AND d.status = 'online'
-  //         AND d.cab_type_id = $1
-  //         AND (
-  //           $2::INT IS NULL OR EXISTS (
-  //             SELECT 1
-  //             FROM driver_disability_features ddf
-  //             WHERE ddf.driver_id = d.id
-  //               AND ddf.disability_feature_id = $2
-  //           )
-  //         )
-  //       ORDER BY (
-  //         6371 * acos(
-  //           cos(radians($3)) * cos(radians(d.current_lat)) *
-  //           cos(radians(d.current_lng) - radians($4)) +
-  //           sin(radians($3)) * sin(radians(d.current_lat))
-  //         )
-  //       ) ASC
-  //       LIMIT 1
-  //       FOR UPDATE
-  //     `;
-
-  //       const params = [
-  //         cab_type_id,                    // $1
-  //         disability_features_id,         // $2 (NULL allowed)
-  //         pickup_lat,                     // $3
-  //         pickup_lng                      // $4
-  //       ];
-
-  //       const driverRes = await client.query(driverQuery, params);
-
-  //       if (!driverRes.rowCount) throw 'NO_DRIVER_AVAILABLE';
-
-  //       driverId = driverRes.rows[0].id;
-  //       console.log(driverRes.rows[0]);
-
-  //       await client.query(
-  //         'UPDATE drivers SET is_available = false WHERE id = $1',
-  //         [driverId]
-  //       );
-  //     }
-
-  //     // ✅ Create booking
-  //     const bookingRes = await client.query(`
-  //     INSERT INTO cab_bookings (
-  //       user_id, driver_id, cab_type_id, booking_type,
-  //       pickup_address, pickup_lat, pickup_lng,
-  //       drop_address, drop_lat, drop_lng,
-  //       scheduled_time, distance_km, estimated_fare,
-  //       status, booking_mode, disability_features_id
-  //     )
-  //     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
-  //     RETURNING *
-  //   `, [
-  //       user_id,
-  //       driverId,
-  //       cab_type_id,
-  //       booking_type,
-  //       pickup_address,
-  //       pickup_lat,
-  //       pickup_lng,
-  //       drop_address,
-  //       drop_lat,
-  //       drop_lng,
-  //       scheduled_time || null,
-  //       distance_km,
-  //       estimated_fare,
-  //       booking_type === 'instant' ? 'pending' : 'scheduled',
-  //       booking_mode,
-  //       disability_features_id
-  //     ]);
-
-  //     await client.query('COMMIT');
-
-  //     const booking = bookingRes.rows[0];
-
-  //     // 🔔 Notify driver
-  //     if (driverId) {
-  //       io.to(`driver:${driverId}`).emit('booking:new', booking);
-  //     }
-
-  //     // 🔔 Confirm user
-  //     socket.emit('booking:confirmed', booking);
-
-  //     callback({ status: true, data: booking });
-
-  //   } catch (err) {
-  //     await client.query('ROLLBACK');
-
-  //     const messages = {
-  //       MISSING_FIELDS: 'Missing required fields',
-  //       NO_DRIVER_AVAILABLE: 'No suitable driver available',
-  //       CAB_NOT_FOUND: 'Cab type not found'
-  //     };
-
-  //     callback({
-  //       status: false,
-  //       message: messages[err] || 'Server error'
-  //     });
-
-  //   } finally {
-  //     client.release();
-  //   }
-  // });
 
 
   socket.on('cab:book', async (payload, callback) => {
@@ -413,7 +254,8 @@ module.exports = (io, socket) => {
         SELECT 
           u.id,
           u.full_name,
-          u.profile_image
+          u.profile_image,
+          u.phone_number
         FROM users u
         WHERE u.id = $1
         `,
@@ -436,6 +278,7 @@ module.exports = (io, socket) => {
         user: {
           id: user.id,
           full_name: user.full_name,
+          phone_number: user.phone_number,
           profile_image: userProfileImage
         }
       };
