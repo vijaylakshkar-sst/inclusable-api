@@ -727,7 +727,7 @@ exports.getCardsList = async (req, res) => {
 
     const stripeCustomerId = rows[0]?.stripe_customer_id;
     if (!stripeCustomerId) {
-      return res.status(404).json({ status: false, message: "Customer not found" });
+      return res.status(400).json({ status: false, message: "Customer not found" });
     }
 
     const customer = await stripe.customers.retrieve(stripeCustomerId);
@@ -812,7 +812,7 @@ exports.removeCard = async (req, res) => {
 
     if (!rows.length || !rows[0].stripe_customer_id) {
       return res
-        .status(404)
+        .status(400)
         .json({ status: false, message: "Stripe customer not found" });
     }
 
@@ -854,7 +854,7 @@ exports.makeDefaultCard = async (req, res) => {
 
     if (!rows.length || !rows[0].stripe_customer_id) {
       return res
-        .status(404)
+        .status(400)
         .json({ status: false, message: "Stripe customer not found" });
     }
 
