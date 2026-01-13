@@ -15,5 +15,7 @@ router.post("/setup-intent", auth,  userCabController.createSetupIntent);
 router.post("/payment-confirm", auth, userCabController.confirmSetupIntent);
 router.get("/cards-list", auth, userCabController.getCardsList);
 router.get("/my-rides", auth, userCabController.getMyRides);
+router.delete("/card-remove/:paymentMethodId", auth, userCabController.removeCard);
+router.post("/cards/:paymentMethodId/default", auth, userCabController.makeDefaultCard);
 
 module.exports = router;

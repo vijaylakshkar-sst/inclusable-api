@@ -34,6 +34,7 @@ router.get("/makes", auth, driverController.getMakes);
 router.get("/models/:make_id", auth, driverController.getModelsByMake);
 router.get("/disability-features", auth, driverController.getDisabilityFeaturs);
 router.get("/vehicle-types", auth, driverController.getVehicleTypes);
+router.get("/letest-booking", auth, driverController.getLetestBooking);
 
 router.post("/assign-scheduled", driverController.assignScheduledBookings );
 router.post("/cancel-expired", driverController.cancelExpiredBookings );

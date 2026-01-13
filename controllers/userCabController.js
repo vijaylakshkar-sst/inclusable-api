@@ -725,15 +725,29 @@ exports.getCardsList = async (req, res) => {
       [userId]
     );
 
+    const stripeCustomerId = rows[0]?.stripe_customer_id;
+    if (!stripeCustomerId) {
+      return res.status(404).json({ status: false, message: "Customer not found" });
+    }
+
+    const customer = await stripe.customers.retrieve(stripeCustomerId);
+
     const cards = await stripe.paymentMethods.list({
-      customer: rows[0].stripe_customer_id,
+      customer: stripeCustomerId,
       type: "card",
     });
 
-    res.json({ status: true, data: cards.data });
+    const defaultPM = customer.invoice_settings.default_payment_method;
+
+    const formatted = cards.data.map((c) => ({
+      ...c,
+      is_default: c.id === defaultPM,
+    }));
+
+    res.json({ status: true, data: formatted });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ status: false, message: err.message });
+    res.status(200).json({ status: false, message: err.message });
   }
 };
 
@@ -781,5 +795,84 @@ exports.getMyRides = async (req, res) => {
       success: false,
       message: "Failed to fetch ride history",
     });
+  }
+};
+
+
+exports.removeCard = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { paymentMethodId } = req.params;
+
+    // Get Stripe customer id
+    const { rows } = await pool.query(
+      "SELECT stripe_customer_id FROM users WHERE id=$1",
+      [userId]
+    );
+
+    if (!rows.length || !rows[0].stripe_customer_id) {
+      return res
+        .status(404)
+        .json({ status: false, message: "Stripe customer not found" });
+    }
+
+    const stripeCustomerId = rows[0].stripe_customer_id;
+
+    // Retrieve customer to check default card
+    const customer = await stripe.customers.retrieve(stripeCustomerId);
+    const defaultPM = customer.invoice_settings.default_payment_method;
+
+    // If removing default card -> unset it first
+    if (defaultPM === paymentMethodId) {
+      await stripe.customers.update(stripeCustomerId, {
+        invoice_settings: { default_payment_method: null },
+      });
+    }
+
+    // Detach card (remove from customer)
+    await stripe.paymentMethods.detach(paymentMethodId);
+
+    res.json({
+      status: true,
+      message: "Card removed successfully",
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ status: false, message: err.message });
+  }
+};
+
+exports.makeDefaultCard = async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    const { paymentMethodId } = req.params;
+
+    const { rows } = await pool.query(
+      "SELECT stripe_customer_id FROM users WHERE id=$1",
+      [userId]
+    );
+
+    if (!rows.length || !rows[0].stripe_customer_id) {
+      return res
+        .status(404)
+        .json({ status: false, message: "Stripe customer not found" });
+    }
+
+    const stripeCustomerId = rows[0].stripe_customer_id;
+
+    // ✅ Set default payment method
+    await stripe.customers.update(stripeCustomerId, {
+      invoice_settings: {
+        default_payment_method: paymentMethodId,
+      },
+    });
+
+    res.json({
+      status: true,
+      message: "Default card updated successfully",
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ status: false, message: err.message });
   }
 };

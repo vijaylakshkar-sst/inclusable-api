@@ -296,6 +296,18 @@ module.exports = (io, socket, driverId) => {
           booking_id: booking.id,
         });
 
+        const driverRes = await client.query(
+            `
+            SELECT u.full_name
+            FROM drivers d
+            JOIN users u ON u.id = d.user_id
+            WHERE d.id = $1
+            `,
+            [driverId]
+          );
+
+          const drivername = driverRes.rows[0]?.full_name || "Driver";
+
         bookingDriversMap.delete(bookingId);
 
         socket.join(`booking:${bookingId}`);
@@ -313,6 +325,7 @@ module.exports = (io, socket, driverId) => {
         io.to(`booking:${bookingId}`).emit("booking:accepted", {
           bookingId,
           driverId,
+          drivername,
         });
 
         return;
