@@ -340,12 +340,24 @@ exports.verifyEmail = async (req, res) => {
     if (type === 'register') {
 
       let stripeCustomerId = user.stripe_customer_id;
+      const token = jwt.sign({ userId: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
 
       if (fcm_token && fcm_token.trim() !== '') {
-        await pool.query('UPDATE users SET fcm_token = $1 WHERE id = $2', [fcm_token, user.id]);
+       
+
+        await pool.query(
+          `UPDATE users 
+        SET active_token = $1, 
+            fcm_token = $2, 
+            last_login_at = NOW() 
+        WHERE id = $3`,
+          [token, fcm_token || null, user.id]
+        );
+        console.log(`✅ FCM token updated for user ID: ${user.id}`);
       }
 
-      const token = jwt.sign({ userId: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+
+
       res.json({
         status: true,
         message: 'Email verified successfully.',
@@ -532,11 +544,11 @@ exports.login = async (req, res) => {
       { userId: user.id, email: user.email, role: user.role },
       process.env.JWT_SECRET,   // ✅ FIX
       { expiresIn: "7d" }
-    );    
+    );
 
     // Update FCM token if provided
     if (fcm_token && fcm_token.trim() !== '') {
-     await client.query(
+      await client.query(
         `UPDATE users 
         SET active_token = $1, 
             fcm_token = $2, 
