@@ -1,7 +1,8 @@
 
 const pool = require('../dbconfig');
-const { sendNotification, sendNotificationToUser } = require('../hooks/notification');
+const { sendNotification, sendNotificationToUser, sendNotificationToDriver } = require('../hooks/notification');
 const BASE_IMAGE_URL = process.env.BASE_IMAGE_URL;
+const { getIO } = require("../sockets/index");
 // ✅ Create/Update Helper for image uploads (middleware sends file paths)
 const getFilePath = (file) => (file ? `/drivers/${file.filename}` : null);
 
@@ -119,15 +120,15 @@ exports.addProfile = async (req, res) => {
 //  GET /cab-profile/:id
 // ===========================================================
 exports.getProfile = async (req, res) => {
-  const user_id = req.user?.userId;
+    const user_id = req.user?.userId;
 
-  if (!user_id) {
-    return res.status(401).json({ status: false, error: 'Unauthorized' });
-  }
+    if (!user_id) {
+        return res.status(401).json({ status: false, error: 'Unauthorized' });
+    }
 
-  try {
-    // 🔹 Step 1: Fetch user basic details
-    const userQuery = `
+    try {
+        // 🔹 Step 1: Fetch user basic details
+        const userQuery = `
       SELECT 
         id,
         full_name,
@@ -146,33 +147,33 @@ exports.getProfile = async (req, res) => {
       WHERE id = $1 AND deleted_at IS NULL
       LIMIT 1;
     `;
-    const userResult = await pool.query(userQuery, [user_id]);
+        const userResult = await pool.query(userQuery, [user_id]);
 
-    if (userResult.rowCount === 0) {
-      return res.status(404).json({
-        status: false,
-        message: 'User not found'
-      });
-    }
+        if (userResult.rowCount === 0) {
+            return res.status(404).json({
+                status: false,
+                message: 'User not found'
+            });
+        }
 
-    const user = userResult.rows[0];
+        const user = userResult.rows[0];
 
-    const userData = {
-      ...user,
-      profile_image_url: user.profile_image
-        ? `${BASE_IMAGE_URL}/${user.profile_image}`
-        : null,
-      stripe_account_status:
-        user.stripe_account_status === '3'
-          ? 'Active'
-          : user.stripe_account_status === '2'
-            ? 'Under Review'
-            : 'Pending'
-    };
+        const userData = {
+            ...user,
+            profile_image_url: user.profile_image
+                ? `${BASE_IMAGE_URL}/${user.profile_image}`
+                : null,
+            stripe_account_status:
+                user.stripe_account_status === '3'
+                    ? 'Active'
+                    : user.stripe_account_status === '2'
+                        ? 'Under Review'
+                        : 'Pending'
+        };
 
-    // 🔹 Step 2: Fetch driver profile ONLY for Cab Owner
-    if (user.role === 'Cab Owner') {
-      const driverQuery = `
+        // 🔹 Step 2: Fetch driver profile ONLY for Cab Owner
+        if (user.role === 'Cab Owner') {
+            const driverQuery = `
         SELECT 
           d.*,
           vm.name AS vehicle_model_name,
@@ -184,60 +185,60 @@ exports.getProfile = async (req, res) => {
         LIMIT 1;
       `;
 
-      const driverResult = await pool.query(driverQuery, [user_id]);
+            const driverResult = await pool.query(driverQuery, [user_id]);
 
-      if (driverResult.rowCount > 0) {
-        const driver = driverResult.rows[0];
+            if (driverResult.rowCount > 0) {
+                const driver = driverResult.rows[0];
 
-        // 🔹 Step 3: Disability features
-        const featuresQuery = `
+                // 🔹 Step 3: Disability features
+                const featuresQuery = `
           SELECT df.id, df.name
           FROM driver_disability_features ddf
           JOIN disability_features df ON ddf.disability_feature_id = df.id
           WHERE ddf.driver_id = $1;
         `;
-        const featuresResult = await pool.query(featuresQuery, [driver.id]);
+                const featuresResult = await pool.query(featuresQuery, [driver.id]);
 
-        driver.disability_features = featuresResult.rows;
+                driver.disability_features = featuresResult.rows;
 
-        // 🔹 Step 4: Attach image URLs
-        const fileFields = [
-          'license_photo_front',
-          'license_photo_back',
-          'rc_copy',
-          'insurance_copy',
-          'police_check_certificate',
-          'wwvp_card'
-        ];
+                // 🔹 Step 4: Attach image URLs
+                const fileFields = [
+                    'license_photo_front',
+                    'license_photo_back',
+                    'rc_copy',
+                    'insurance_copy',
+                    'police_check_certificate',
+                    'wwvp_card'
+                ];
 
-        fileFields.forEach(field => {
-          if (driver[field]) {
-            const cleanPath = driver[field].replace(/^\/+/, '');
-            driver[field] = `${BASE_IMAGE_URL}/${cleanPath}`;
-          }
+                fileFields.forEach(field => {
+                    if (driver[field]) {
+                        const cleanPath = driver[field].replace(/^\/+/, '');
+                        driver[field] = `${BASE_IMAGE_URL}/${cleanPath}`;
+                    }
+                });
+
+                userData.driver_details = driver;
+            } else {
+                userData.driver_details = null;
+            }
+        }
+
+        // 🔹 Step 5: Send response
+        return res.json({
+            status: true,
+            data: {
+                user: userData
+            }
         });
 
-        userData.driver_details = driver;
-      } else {
-        userData.driver_details = null;
-      }
+    } catch (err) {
+        console.error('❌ Error fetching profile:', err.message);
+        return res.status(500).json({
+            status: false,
+            message: 'Internal server error'
+        });
     }
-
-    // 🔹 Step 5: Send response
-    return res.json({
-      status: true,
-      data: {
-        user: userData
-      }
-    });
-
-  } catch (err) {
-    console.error('❌ Error fetching profile:', err.message);
-    return res.status(500).json({
-      status: false,
-      message: 'Internal server error'
-    });
-  }
 };
 
 // ===========================================================
@@ -637,24 +638,24 @@ exports.acceptBooking = async (req, res) => {
             WHERE id = $2
             `,
             [driverId, bookingId]
-        );     
+        );
 
         const vehicle_number = driverRes.rows[0].vehicle_number;
 
         // Step 5️⃣: Send notification to passenger
         const title = 'Your Ride Has Been Accepted 🚗';
         const message = `${driverRes.license_number ? 'Driver' : 'Your driver'} has accepted your booking. Vehicle Number: ${vehicle_number || 'N/A'}`;
-        
+
         await sendNotificationToUser({
-        userId: booking.user_id,
-        title,
-        message,
-        type: 'Booking',
-        target: 'NDIS Member',
-        booking_id: booking.id,
+            userId: booking.user_id,
+            title,
+            message,
+            type: 'Booking',
+            target: 'NDIS Member',
+            booking_id: booking.id,
         });
 
-        
+
 
         res.status(200).json({
             status: true,
@@ -723,7 +724,7 @@ exports.ignoreBooking = async (req, res) => {
             WHERE id = $1
             `,
             [bookingId]
-        );       
+        );
 
         res.status(200).json({
             status: true,
@@ -955,109 +956,109 @@ exports.completeRide = async (req, res) => {
 };
 
 exports.cancelRide = async (req, res) => {
-  const user_id = req.user?.userId;
-  const { bookingId } = req.params;
+    const user_id = req.user?.userId;
+    const { bookingId } = req.params;
 
-  if (!user_id) {
-    return res.status(401).json({ status: false, message: 'Unauthorized' });
-  }
-
-  const client = await pool.connect();
-
-  try {
-    await client.query('BEGIN');
-
-    // 1️⃣ Get driver record
-    const driverRes = await client.query(
-      'SELECT id, vehicle_number FROM drivers WHERE user_id = $1 LIMIT 1',
-      [user_id]
-    );
-
-    if (driverRes.rowCount === 0) {
-      return res.status(404).json({ status: false, message: 'Driver not found' });
+    if (!user_id) {
+        return res.status(401).json({ status: false, message: 'Unauthorized' });
     }
 
-    const driver = driverRes.rows[0];
-    const driverId = driver.id;
+    const client = await pool.connect();
 
-    // 2️⃣ Fetch booking
-    const bookingRes = await client.query(
-      'SELECT * FROM cab_bookings WHERE id = $1 LIMIT 1',
-      [bookingId]
-    );
+    try {
+        await client.query('BEGIN');
 
-    if (bookingRes.rowCount === 0) {
-      return res.status(404).json({ status: false, message: 'Booking not found' });
-    }
+        // 1️⃣ Get driver record
+        const driverRes = await client.query(
+            'SELECT id, vehicle_number FROM drivers WHERE user_id = $1 LIMIT 1',
+            [user_id]
+        );
 
-    const booking = bookingRes.rows[0];
+        if (driverRes.rowCount === 0) {
+            return res.status(404).json({ status: false, message: 'Driver not found' });
+        }
 
-    if (booking.driver_id !== driverId) {
-      return res.status(403).json({
-        status: false,
-        message: 'This booking does not belong to you.',
-      });
-    }
+        const driver = driverRes.rows[0];
+        const driverId = driver.id;
 
-    if (!['pending', 'accepted', 'in_progress'].includes(booking.status)) {
-      return res.status(400).json({
-        status: false,
-        message: `Booking cannot be cancelled. Current status: ${booking.status}`,
-      });
-    }
+        // 2️⃣ Fetch booking
+        const bookingRes = await client.query(
+            'SELECT * FROM cab_bookings WHERE id = $1 LIMIT 1',
+            [bookingId]
+        );
+
+        if (bookingRes.rowCount === 0) {
+            return res.status(404).json({ status: false, message: 'Booking not found' });
+        }
+
+        const booking = bookingRes.rows[0];
+
+        if (booking.driver_id !== driverId) {
+            return res.status(403).json({
+                status: false,
+                message: 'This booking does not belong to you.',
+            });
+        }
+
+        if (!['pending', 'accepted', 'in_progress'].includes(booking.status)) {
+            return res.status(400).json({
+                status: false,
+                message: `Booking cannot be cancelled. Current status: ${booking.status}`,
+            });
+        }
 
         await client.query(
-        `
+            `
         UPDATE cab_bookings
         SET status = 'cancelled',
             updated_at = NOW()
         WHERE id = $1
         `,
-        [bookingId]
+            [bookingId]
         );
 
-    // 4️⃣ Mark driver as available again
-    await client.query(
-      `UPDATE drivers SET is_available = TRUE, status = 'online', updated_at = NOW() WHERE id = $1`,
-      [driverId]
-    );
+        // 4️⃣ Mark driver as available again
+        await client.query(
+            `UPDATE drivers SET is_available = TRUE, status = 'online', updated_at = NOW() WHERE id = $1`,
+            [driverId]
+        );
 
-    // 5️⃣ Notify the NDIS Member (user)
-    const userRes = await client.query(
-      `SELECT id, full_name, fcm_token FROM users WHERE id = $1 LIMIT 1`,
-      [booking.user_id]
-    );
-   
-    const title = 'Your Ride Has Been Cancelled ❌';
-    const message = `Your driver cancelled the booking.`;
+        // 5️⃣ Notify the NDIS Member (user)
+        const userRes = await client.query(
+            `SELECT id, full_name, fcm_token FROM users WHERE id = $1 LIMIT 1`,
+            [booking.user_id]
+        );
 
-    await sendNotificationToUser({
-      userId: booking.user_id,
-      title,
-      message,
-      type: 'Booking',
-      target: 'NDIS Member',
-      booking_id: booking.id,
-      data: { status: 'cancelled' },
-    });
+        const title = 'Your Ride Has Been Cancelled ❌';
+        const message = `Your driver cancelled the booking.`;
 
-    await client.query('COMMIT');
+        await sendNotificationToUser({
+            userId: booking.user_id,
+            title,
+            message,
+            type: 'Booking',
+            target: 'NDIS Member',
+            booking_id: booking.id,
+            data: { status: 'cancelled' },
+        });
 
-    res.status(200).json({
-      status: true,
-      message: 'Ride cancelled successfully',
-      data: {
-        booking_id: bookingId,
-        status: 'cancelled'        
-      },
-    });
-  } catch (err) {
-    await client.query('ROLLBACK');
-    console.error('❌ Error cancelling ride:', err.message);
-    res.status(500).json({ status: false, message: err.message });
-  } finally {
-    client.release();
-  }
+        await client.query('COMMIT');
+
+        res.status(200).json({
+            status: true,
+            message: 'Ride cancelled successfully',
+            data: {
+                booking_id: bookingId,
+                status: 'cancelled'
+            },
+        });
+    } catch (err) {
+        await client.query('ROLLBACK');
+        console.error('❌ Error cancelling ride:', err.message);
+        res.status(500).json({ status: false, message: err.message });
+    } finally {
+        client.release();
+    }
 };
 
 
@@ -1149,98 +1150,98 @@ exports.getHistory = async (req, res) => {
 };
 
 exports.getMakes = async (req, res) => {
-  try {
-    const result = await pool.query(`SELECT id, name FROM vehicle_makes ORDER BY name ASC`);
-    res.json({ status: true, data: result.rows });
-  } catch (err) {
-    res.status(500).json({ status: false, message: err.message });
-  }
+    try {
+        const result = await pool.query(`SELECT id, name FROM vehicle_makes ORDER BY name ASC`);
+        res.json({ status: true, data: result.rows });
+    } catch (err) {
+        res.status(500).json({ status: false, message: err.message });
+    }
 };
 
 exports.getModelsByMake = async (req, res) => {
-  try {
-    const { make_id } = req.params;
+    try {
+        const { make_id } = req.params;
 
-    const query = `
+        const query = `
       SELECT id, name 
       FROM vehicle_models 
       WHERE make_id = $1
       ORDER BY name ASC
     `;
 
-    const result = await pool.query(query, [make_id]);
+        const result = await pool.query(query, [make_id]);
 
-    res.json({ status: true, data: result.rows });
-  } catch (err) {
-    res.status(500).json({ status: false, message: err.message });
-  }
+        res.json({ status: true, data: result.rows });
+    } catch (err) {
+        res.status(500).json({ status: false, message: err.message });
+    }
 };
 
 exports.getDisabilityFeaturs = async (req, res) => {
-  try {
-    const result = await pool.query(`SELECT id, name FROM disability_features ORDER BY name ASC`);
-    res.json({ status: true, data: result.rows });
-  } catch (err) {
-    res.status(500).json({ status: false, message: err.message });
-  }
+    try {
+        const result = await pool.query(`SELECT id, name FROM disability_features ORDER BY name ASC`);
+        res.json({ status: true, data: result.rows });
+    } catch (err) {
+        res.status(500).json({ status: false, message: err.message });
+    }
 };
 
 exports.getVehicleTypes = async (req, res) => {
-  try {
-    const result = await pool.query(`SELECT * FROM cab_types ORDER BY name ASC`);
-    res.json({ status: true, data: result.rows });
-  } catch (err) {
-    res.status(500).json({ status: false, message: err.message });
-  }
+    try {
+        const result = await pool.query(`SELECT * FROM cab_types ORDER BY name ASC`);
+        res.json({ status: true, data: result.rows });
+    } catch (err) {
+        res.status(500).json({ status: false, message: err.message });
+    }
 };
 
 
 exports.getDashboard = async (req, res) => {
-  const user_id = req.user.userId;
+    const user_id = req.user.userId;
 
-  try {
-    // 🔹 Get driver
-    const driverRes = await pool.query(
-      `SELECT id FROM drivers WHERE user_id = $1 LIMIT 1`,
-      [user_id]
-    );
+    try {
+        // 🔹 Get driver
+        const driverRes = await pool.query(
+            `SELECT id FROM drivers WHERE user_id = $1 LIMIT 1`,
+            [user_id]
+        );
 
-    if (!driverRes.rowCount) {
-      return res.status(404).json({ status: false, message: "Driver not found" });
-    }
+        if (!driverRes.rowCount) {
+            return res.status(404).json({ status: false, message: "Driver not found" });
+        }
 
-    const driver_id = driverRes.rows[0].id;
+        const driver_id = driverRes.rows[0].id;
 
-    // 🔹 Parallel queries
-    const [
-      jobs,
-      distance,
-      earnings,
-      hours
-    ] = await Promise.all([
+        // 🔹 Parallel queries
+        const [
+            jobs,
+            distance,
+            earnings,
+            hours
+        ] = await Promise.all([
 
-      pool.query(`
+            pool.query(`
         SELECT COUNT(*) FROM cab_bookings
         WHERE driver_id = $1
           AND status = 'completed'
           AND DATE(updated_at) = CURRENT_DATE
       `, [driver_id]),
 
-      pool.query(`
+            pool.query(`
         SELECT COALESCE(SUM(distance_km),0) FROM cab_bookings
         WHERE driver_id = $1
           AND status = 'completed'
           AND DATE(updated_at) = CURRENT_DATE
       `, [driver_id]),
 
-      pool.query(`
+            pool.query(`
         SELECT COALESCE(SUM(estimated_fare),0) FROM cab_bookings
         WHERE driver_id = $1
           AND status = 'completed'
           AND DATE(updated_at) = CURRENT_DATE
       `, [driver_id]),
 
-      pool.query(`
+            pool.query(`
         WITH logs AS (
           SELECT created_at, status,
           LEAD(created_at) OVER (ORDER BY created_at) AS next_time
@@ -1259,82 +1260,237 @@ exports.getDashboard = async (req, res) => {
         FROM logs
         WHERE status = 'online'
       `, [driver_id])
-    ]);
+        ]);
 
-    res.json({
-      status: true,
-      data: {
-        total_jobs: Number(jobs.rows[0].count),
-        total_distance: Number(distance.rows[0].coalesce),
-        total_earned: Number(earnings.rows[0].coalesce),
-        hours_online: Number(hours.rows[0].hours_online || 0)
-      }
-    });
+        res.json({
+            status: true,
+            data: {
+                total_jobs: Number(jobs.rows[0].count),
+                total_distance: Number(distance.rows[0].coalesce),
+                total_earned: Number(earnings.rows[0].coalesce),
+                hours_online: Number(hours.rows[0].hours_online || 0)
+            }
+        });
 
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ status: false, message: "Server error" });
-  }
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ status: false, message: "Server error" });
+    }
 };
 
 exports.submitUserRating = async (req, res) => {
-  
-  const {driver_id, user_id, rating, description } = req.body;
 
-  if (!user_id || !rating) {
-    return res.status(400).json({
-      status: false,
-      message: "User ID and rating are required",
-    });
-  }
+    const { driver_id, user_id, rating, description } = req.body;
 
-  if (rating < 1 || rating > 5) {
-    return res.status(400).json({
-      status: false,
-      message: "Rating must be between 1 and 5",
-    });
-  }
-
-  const client = await pool.connect();
-
-  try {
-    await client.query("BEGIN");
-
-    // 1️⃣ Ensure user exists
-    const userRes = await client.query(
-      "SELECT id FROM users WHERE id = $1",
-      [user_id]
-    );
-
-    if (!userRes.rows.length) {
-      throw new Error("User not found");
+    if (!user_id || !rating) {
+        return res.status(400).json({
+            status: false,
+            message: "User ID and rating are required",
+        });
     }
 
-    // 2️⃣ Insert review ✅
-    const reviewRes = await client.query(
-      `
+    if (rating < 1 || rating > 5) {
+        return res.status(400).json({
+            status: false,
+            message: "Rating must be between 1 and 5",
+        });
+    }
+
+    const client = await pool.connect();
+
+    try {
+        await client.query("BEGIN");
+
+        // 1️⃣ Ensure user exists
+        const userRes = await client.query(
+            "SELECT id FROM users WHERE id = $1",
+            [user_id]
+        );
+
+        if (!userRes.rows.length) {
+            throw new Error("User not found");
+        }
+
+        // 2️⃣ Insert review ✅
+        const reviewRes = await client.query(
+            `
       INSERT INTO driver_reviews (driver_id, user_id, rating, description)
       VALUES ($1, $2, $3, $4)
       RETURNING *;
       `,
-      [driver_id, user_id, rating, description || null]
-    );
+            [driver_id, user_id, rating, description || null]
+        );
 
-    await client.query("COMMIT");
+        await client.query("COMMIT");
 
-    res.status(201).json({
-      status: true,
-      message: "User rated successfully",
-      data: reviewRes.rows[0],
+        res.status(201).json({
+            status: true,
+            message: "User rated successfully",
+            data: reviewRes.rows[0],
+        });
+
+    } catch (err) {
+        await client.query("ROLLBACK");
+        console.error("❌ user rating error:", err.message);
+
+        res.status(400).json({
+            status: false,
+            message: err.message,
+        });
+    } finally {
+        client.release();
+    }
+};
+
+exports.assignScheduledBookings = async (req, res) => {
+    const minutesBefore =
+        req.body && req.body.minutes_before
+            ? Number(req.body.minutes_before)
+            : 15;
+
+    const client = await pool.connect();
+
+    try {
+        const bookingsRes = await client.query(`
+      SELECT *
+      FROM cab_bookings
+      WHERE status = 'scheduled'
+        AND driver_id IS NULL
+        AND scheduled_time <= NOW() + ($1 * INTERVAL '1 minute')
+        AND scheduled_time > NOW()
+    `, [minutesBefore]);
+
+        let broadcasted = 0;
+
+        for (const booking of bookingsRes.rows) {
+            const sent = await broadcastScheduledBooking(booking);
+            if (sent) broadcasted++;
+        }
+
+        res.json({
+            processed: bookingsRes.rowCount,
+            assigned_for_broadcast: broadcasted
+        });
+
+    } catch (err) {
+        console.error("❌ assignScheduledBookings error:", err);
+        res.status(500).json({ message: "Server error" });
+    } finally {
+        client.release();
+    }
+};
+
+async function broadcastScheduledBooking(booking) {
+
+    // 🔁 Radius per attempt
+    const radiusByAttempt = [5, 8, 12];
+    const radius =
+        radiusByAttempt[booking.assign_attempts] || 15;
+
+
+    // 1️⃣ Find nearby drivers
+    const drivers = await pool.query(`
+    SELECT t.id, t.user_id
+        FROM (
+            SELECT 
+                d.id,
+                d.user_id,
+                (
+                    6371 * acos(
+                        cos(radians($1)) * cos(radians(d.current_lat)) *
+                        cos(radians(d.current_lng) - radians($2)) +
+                        sin(radians($1)) * sin(radians(d.current_lat))
+                    )
+                ) AS distance
+            FROM drivers d
+            WHERE d.is_available = true
+            AND d.status = 'online'
+            AND d.cab_type_id = $3
+            AND d.current_lat IS NOT NULL
+            AND d.current_lng IS NOT NULL
+            AND (
+                $4::INT IS NULL OR EXISTS (
+                SELECT 1
+                FROM driver_disability_features ddf
+                WHERE ddf.driver_id = d.id
+                    AND ddf.disability_feature_id = $4
+                )
+            )
+        ) t
+        WHERE t.distance <= $5
+        ORDER BY t.distance ASC
+        LIMIT 20
+    `, [
+        booking.pickup_lat,
+        booking.pickup_lng,
+        booking.cab_type_id,
+        booking.disability_features_id,
+        radius
+    ]);
+
+    if (!drivers.rowCount) {
+        await pool.query(`
+      UPDATE cab_bookings
+      SET assign_attempts = assign_attempts + 1
+      WHERE id = $1
+    `, [booking.id]);
+
+        return false;
+    }
+
+    const driverIds = new Set();    
+
+    for (const driver of drivers.rows) {
+        driverIds.add(driver.id);
+        
+        await sendNotificationToDriver({
+            driverUserId: driver.user_id,
+            title: 'Scheduled Ride Available',
+            message: `Pickup at ${booking.pickup_address}`,
+            type: 'Booking',
+            booking_id: String(booking.id),
+            image_url: `${BASE_IMAGE_URL}/icons/check-xmark.png`,
+            bg_color: '#DF1D17',
+            data: {
+                screen: 'BookingDetails',
+                sound: 'default',
+            }
+        });
+
+        const io = getIO();
+
+        io.to(`driver:${driver.id}`).emit("booking:new", {
+            ...booking,
+            is_scheduled: true
+        });
+    }
+    return true;
+}
+
+exports.cancelExpiredBookings = async (req, res) => {
+  const client = await pool.connect();
+
+  try {
+    const { rows } = await client.query(`
+      UPDATE cab_bookings
+      SET status = 'cancelled'      
+      WHERE driver_id IS NULL
+        AND status IN ('scheduled', 'pending')
+        AND scheduled_time < NOW()
+      RETURNING id, user_id
+    `);
+
+    return res.json({
+      success: true,
+      cancelled_count: rows.length,
+      cancelled_bookings: rows.map(b => b.id)
     });
 
   } catch (err) {
-    await client.query("ROLLBACK");
-    console.error("❌ user rating error:", err.message);
-
-    res.status(400).json({
-      status: false,
-      message: err.message,
+    console.error("❌ cancelExpiredBookings error:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Server error"
     });
   } finally {
     client.release();

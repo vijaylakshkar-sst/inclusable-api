@@ -3,9 +3,12 @@ const socketAuth = require("./socketAuth");
 const driverHandler = require("./handlers/driver.handler");
 const bookingHandler = require("./handlers/booking.handler");
 const userHandler = require("./handlers/user.handler");
-const pool = require("../dbconfig"); // your MySQL pool
-module.exports = function initSocket(server) {
-  const io = new Server(server, {
+const pool = require("../dbconfig");
+
+let io; // 🔥 GLOBAL SINGLETON
+
+function initSocket(server) {
+  io = new Server(server, {
     cors: { origin: "*" },
   });
 
@@ -19,29 +22,25 @@ module.exports = function initSocket(server) {
 
     if (role === "Cab Owner" || role === "Driver") {
       try {
-        // PostgreSQL uses $1 placeholders
         const result = await pool.query(
           "SELECT id FROM drivers WHERE user_id = $1 LIMIT 1",
           [userId]
         );
 
-        if (result.rows.length > 0) {
+        if (result.rows.length) {
           driverId = result.rows[0].id;
           socket.join(`driver:${driverId}`);
           console.log(`🚗 Driver joined room: driver:${driverId}`);
-        } else {
-          console.log(`⚠ No driver found for userId: ${userId}`);
         }
       } catch (err) {
         console.error("❌ Error fetching driver ID:", err);
       }
     }
 
-      /* ================= BOOKING ROOM (🔥 FIX) ================= */
     socket.on("booking:join", ({ bookingId }) => {
-      if (!bookingId) return;
-      socket.join(`booking:${bookingId}`);
-      console.log(`📦 Socket ${socket.id} joined booking:${bookingId}`);
+      if (bookingId) {
+        socket.join(`booking:${bookingId}`);
+      }
     });
 
     driverHandler(io, socket, driverId);
@@ -54,5 +53,16 @@ module.exports = function initSocket(server) {
   });
 
   return io;
-};
+}
 
+function getIO() {
+  if (!io) {
+    throw new Error("❌ Socket.io not initialized. Call initSocket(server) first.");
+  }
+  return io;
+}
+
+module.exports = {
+  initSocket,
+  getIO,
+};
