@@ -1,6 +1,12 @@
 const pool = require('../dbconfig');
 const { sendNotification, sendNotificationToDriver } = require('../hooks/notification');
 const stripe = require('../stripe');
+const dayjs = require('dayjs');
+const utc = require('dayjs/plugin/utc');
+const timezone = require('dayjs/plugin/timezone');
+
+dayjs.extend(utc);
+dayjs.extend(timezone);
 
 const BASE_IMAGE_URL = process.env.BASE_IMAGE_URL;
 
@@ -304,6 +310,15 @@ exports.bookCab = async (req, res) => {
 
     const booking_otp = Math.floor(1000 + Math.random() * 9000);
 
+    let scheduledAt = null;
+
+    if (booking_type === 'later') {
+      scheduledAt = dayjs
+        .tz(scheduled_time, 'Asia/Kolkata') // incoming timezone
+        .utc()
+        .toDate();
+    }
+
     const bookingRes = await client.query(
       `
       INSERT INTO cab_bookings (
@@ -327,7 +342,7 @@ exports.bookCab = async (req, res) => {
         drop_address,
         drop_lat,
         drop_lng,
-        scheduled_time || null,
+        scheduledAt || null,
         distance_km,
         estimated_fare,
         booking_type === 'instant' ? 'pending' : 'scheduled',
