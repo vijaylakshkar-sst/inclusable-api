@@ -463,6 +463,104 @@ exports.getBookings = async (req, res) => {
     }
 };
 
+exports.getBookingDetails = async (req, res) => {
+    const user_id = req.user?.userId;
+    const { bookingId } = req.params;
+
+    if (!user_id) {
+        return res.status(401).json({
+            status: false,
+            message: "Unauthorized",
+        });
+    }
+
+    const client = await pool.connect();
+
+    try {
+        // 1️⃣ Get driver linked to user
+        const driverRes = await client.query(
+            "SELECT id, vehicle_number FROM drivers WHERE user_id = $1 LIMIT 1",
+            [user_id]
+        );
+
+        if (!driverRes.rowCount) {
+            return res.status(404).json({
+                status: false,
+                message: "Driver profile not found",
+            });
+        }
+
+        const driverId = driverRes.rows[0].id;
+
+        // 2️⃣ Fetch booking details
+        const bookingQuery = `
+      SELECT
+        b.id,
+        b.booking_type,
+        b.booking_mode,
+        b.pickup_address,
+        b.drop_address,
+        b.pickup_lat,
+        b.pickup_lng,
+        b.drop_lat,
+        b.drop_lng,
+        b.scheduled_time,
+        b.distance_km,
+        b.estimated_fare,
+        b.payment_status,
+        b.booking_otp,
+        b.booking_verified,
+        b.status,
+        b.created_at,
+
+        -- Passenger
+        u.full_name AS passenger_name,
+        u.phone_number AS passenger_phone,
+
+        -- Driver
+        d.vehicle_number,
+        d.license_number,
+
+        -- Cab Type
+        ct.name AS cab_type_name
+
+      FROM cab_bookings b
+      JOIN drivers d ON b.driver_id = d.id
+      JOIN users u ON b.user_id = u.id
+      LEFT JOIN cab_types ct ON b.cab_type_id = ct.id
+      WHERE b.id = $1
+        AND b.driver_id = $2
+      LIMIT 1
+    `;
+
+        const bookingRes = await client.query(bookingQuery, [
+            bookingId,
+            driverId,
+        ]);
+
+        if (!bookingRes.rowCount) {
+            return res.status(404).json({
+                status: false,
+                message: "Booking not found or not assigned to this driver",
+            });
+        }
+
+        // 3️⃣ Success response
+        res.status(200).json({
+            status: true,
+            data: bookingRes.rows[0],
+        });
+    } catch (err) {
+        console.error("❌ Error fetching booking details:", err.message);
+        res.status(500).json({
+            status: false,
+            message: "Server error while fetching booking details",
+        });
+    } finally {
+        client.release();
+    }
+};
+
 exports.updateLocation = async (req, res) => {
     const user_id = req.user?.userId; // From auth middleware
 
@@ -1197,53 +1295,53 @@ exports.getVehicleTypes = async (req, res) => {
 
 
 exports.getDashboard = async (req, res) => {
-  const user_id = req.user.userId;
+    const user_id = req.user.userId;
 
-  try {
-    // 🔹 Get driver
-    const driverRes = await pool.query(
-      `SELECT id FROM drivers WHERE user_id = $1 LIMIT 1`,
-      [user_id]
-    );
+    try {
+        // 🔹 Get driver
+        const driverRes = await pool.query(
+            `SELECT id FROM drivers WHERE user_id = $1 LIMIT 1`,
+            [user_id]
+        );
 
-    if (!driverRes.rowCount) {
-      return res.status(404).json({
-        status: false,
-        message: "Driver not found"
-      });
-    }
+        if (!driverRes.rowCount) {
+            return res.status(404).json({
+                status: false,
+                message: "Driver not found"
+            });
+        }
 
-    const driver_id = driverRes.rows[0].id;
+        const driver_id = driverRes.rows[0].id;
 
-    // 🔹 Parallel overall queries
-    const [jobs, distance, earnings, hours] = await Promise.all([
+        // 🔹 Parallel overall queries
+        const [jobs, distance, earnings, hours] = await Promise.all([
 
-      // Total completed jobs
-      pool.query(`
+            // Total completed jobs
+            pool.query(`
         SELECT COUNT(*) 
         FROM cab_bookings
         WHERE driver_id = $1
           AND status = 'completed'
       `, [driver_id]),
 
-      // Total distance
-      pool.query(`
+            // Total distance
+            pool.query(`
         SELECT COALESCE(SUM(distance_km), 0) 
         FROM cab_bookings
         WHERE driver_id = $1
           AND status = 'completed'
       `, [driver_id]),
 
-      // Total earnings
-      pool.query(`
+            // Total earnings
+            pool.query(`
         SELECT COALESCE(SUM(estimated_fare), 0)
         FROM cab_bookings
         WHERE driver_id = $1
           AND status = 'completed'
       `, [driver_id]),
 
-      // Total hours online (overall)
-      pool.query(`
+            // Total hours online (overall)
+            pool.query(`
         WITH logs AS (
           SELECT 
             created_at,
@@ -1264,25 +1362,25 @@ exports.getDashboard = async (req, res) => {
         FROM logs
         WHERE status = 'online'
       `, [driver_id])
-    ]);
+        ]);
 
-    res.json({
-      status: true,
-      data: {
-        total_jobs: Number(jobs.rows[0].count),
-        total_distance: Number(distance.rows[0].coalesce),
-        total_earned: Number(earnings.rows[0].coalesce),
-        hours_online: Number(hours.rows[0].hours_online || 0)
-      }
-    });
+        res.json({
+            status: true,
+            data: {
+                total_jobs: Number(jobs.rows[0].count),
+                total_distance: Number(distance.rows[0].coalesce),
+                total_earned: Number(earnings.rows[0].coalesce),
+                hours_online: Number(hours.rows[0].hours_online || 0)
+            }
+        });
 
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({
-      status: false,
-      message: "Server error"
-    });
-  }
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({
+            status: false,
+            message: "Server error"
+        });
+    }
 };
 
 exports.submitUserRating = async (req, res) => {
@@ -1445,11 +1543,11 @@ async function broadcastScheduledBooking(booking) {
         return false;
     }
 
-    const driverIds = new Set();    
+    const driverIds = new Set();
 
     for (const driver of drivers.rows) {
         driverIds.add(driver.id);
-        
+
         await sendNotificationToDriver({
             driverUserId: driver.user_id,
             title: 'Scheduled Ride Available',
@@ -1475,10 +1573,10 @@ async function broadcastScheduledBooking(booking) {
 }
 
 exports.cancelExpiredBookings = async (req, res) => {
-  const client = await pool.connect();
+    const client = await pool.connect();
 
-  try {
-    const { rows } = await client.query(`
+    try {
+        const { rows } = await client.query(`
       UPDATE cab_bookings
       SET status = 'cancelled'      
       WHERE driver_id IS NULL
@@ -1487,51 +1585,51 @@ exports.cancelExpiredBookings = async (req, res) => {
       RETURNING id, user_id
     `);
 
-    return res.json({
-      success: true,
-      cancelled_count: rows.length,
-      cancelled_bookings: rows.map(b => b.id)
-    });
+        return res.json({
+            success: true,
+            cancelled_count: rows.length,
+            cancelled_bookings: rows.map(b => b.id)
+        });
 
-  } catch (err) {
-    console.error("❌ cancelExpiredBookings error:", err);
-    return res.status(500).json({
-      success: false,
-      message: "Server error"
-    });
-  } finally {
-    client.release();
-  }
+    } catch (err) {
+        console.error("❌ cancelExpiredBookings error:", err);
+        return res.status(500).json({
+            success: false,
+            message: "Server error"
+        });
+    } finally {
+        client.release();
+    }
 };
 
 
 exports.getLetestBooking = async (req, res) => {
-  const user_id = req.user?.userId;
+    const user_id = req.user?.userId;
 
-  if (!user_id) {
-    return res.status(401).json({ status: false, message: "Unauthorized" });
-  }
-
-  const client = await pool.connect();
-
-  try {
-    // ✅ Get driver_id
-    const driverResult = await client.query(
-      "SELECT id FROM drivers WHERE user_id = $1 LIMIT 1",
-      [user_id]
-    );
-
-    if (driverResult.rowCount === 0) {
-      return res.status(404).json({
-        status: false,
-        message: "Driver not found. Please register your profile first.",
-      });
+    if (!user_id) {
+        return res.status(401).json({ status: false, message: "Unauthorized" });
     }
 
-    const driverId = driverResult.rows[0].id;
+    const client = await pool.connect();
 
-    // ✅ Latest booking only
-    const query = `
+    try {
+        // ✅ Get driver_id
+        const driverResult = await client.query(
+            "SELECT id FROM drivers WHERE user_id = $1 LIMIT 1",
+            [user_id]
+        );
+
+        if (driverResult.rowCount === 0) {
+            return res.status(404).json({
+                status: false,
+                message: "Driver not found. Please register your profile first.",
+            });
+        }
+
+        const driverId = driverResult.rows[0].id;
+
+        // ✅ Latest booking only
+        const query = `
       SELECT 
         b.id,
         b.booking_type,
@@ -1555,35 +1653,35 @@ exports.getLetestBooking = async (req, res) => {
       FROM cab_bookings b
       LEFT JOIN users u ON b.user_id = u.id
       LEFT JOIN cab_types ct ON b.cab_type_id = ct.id
-      WHERE b.driver_id = $1 AND b.status = 'pending'
+      WHERE b.driver_id = $1
       ORDER BY b.created_at DESC
       LIMIT 1;
     `;
 
-    const bookingResult = await client.query(query, [driverId]);
+        const bookingResult = await client.query(query, [driverId]);
 
-    // ✅ If no booking found
-    if (bookingResult.rowCount === 0) {
-      return res.status(200).json({
-        status: true,
-        message: "No pending bookings found",
-        data: null,
-      });
+        // ✅ If no booking found
+        if (bookingResult.rowCount === 0) {
+            return res.status(200).json({
+                status: true,
+                message: "No pending bookings found",
+                data: null,
+            });
+        }
+
+        // ✅ Return single object
+        return res.status(200).json({
+            status: true,
+            data: bookingResult.rows[0],
+        });
+    } catch (err) {
+        console.error("❌ Error fetching driver booking:", err.message);
+        return res.status(500).json({
+            status: false,
+            message: "Server error while fetching booking",
+            error: err.message,
+        });
+    } finally {
+        client.release();
     }
-
-    // ✅ Return single object
-    return res.status(200).json({
-      status: true,
-      data: bookingResult.rows[0],
-    });
-  } catch (err) {
-    console.error("❌ Error fetching driver booking:", err.message);
-    return res.status(500).json({
-      status: false,
-      message: "Server error while fetching booking",
-      error: err.message,
-    });
-  } finally {
-    client.release();
-  }
 };

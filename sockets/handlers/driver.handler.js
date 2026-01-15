@@ -178,6 +178,7 @@ module.exports = (io, socket, driverId) => {
 
       const { status: currentStatus, user_id, estimated_fare } =
         bookingRes.rows[0];
+console.log(currentStatus);
 
       /* =====================================================
          ✅ ACCEPT BOOKING (🔥 FIXED)
@@ -185,11 +186,11 @@ module.exports = (io, socket, driverId) => {
       if (action === "accept") {
 
         // 🔥 CHANGE #1: searching (NOT pending)
-        if (currentStatus !== "searching") {
+        if (!["searching", "scheduled"].includes(currentStatus)) {
           throw new Error("Booking not available for acceptance");
         }
 
-        // 🟢 ⭐ NEW — cancel searching timeout
+        // 🟢 ⭐ NEW — cancel searching Booking not available for acceptance
         const t = bookingTimers?.get(bookingId);
         if (t) {
           clearTimeout(t);
@@ -255,16 +256,18 @@ module.exports = (io, socket, driverId) => {
         // 🔥 CHANGE #2: atomic update (first driver wins)
         const acceptRes = await client.query(
           `
-        UPDATE cab_bookings
-        SET driver_id = $1,
-            payment_intent_id = $2,
-            booking_otp = $3,
-            status = 'accepted',
-            updated_at = NOW()
-        WHERE id = $4
-          AND status = 'searching'
-        RETURNING *
-        `,
+          UPDATE cab_bookings cb
+          SET driver_id = $1,
+              payment_intent_id = $2,
+              booking_otp = $3,
+              status = 'accepted',
+              updated_at = NOW()
+          FROM drivers d
+          WHERE cb.id = $4
+            AND cb.status IN ('searching', 'scheduled')
+            AND d.id = $1
+          RETURNING cb.*, d.vehicle_number
+          `,
           [driverId, paymentIntent.id, otp, bookingId]
         );
 

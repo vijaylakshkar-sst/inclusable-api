@@ -180,7 +180,9 @@ module.exports = (io, socket) => {
     await pool.query(
       `UPDATE cab_bookings
        SET status='cancelled',
-           payment_status='cancelled',
+          is_available=true,
+          status='cancelled',
+           payment_status='partial_paid',
            updated_at=NOW()
        WHERE id=$1`,
       [bookingId]
