@@ -180,7 +180,7 @@ module.exports = (io, socket) => {
     await pool.query(
       `UPDATE cab_bookings
        SET status='cancelled',
-           payment_status='partial_paid',
+           payment_status='cancelled',
            updated_at=NOW()
        WHERE id=$1`,
       [bookingId]
@@ -188,10 +188,15 @@ module.exports = (io, socket) => {
 
     // notify driver (if assigned)
     if (driver_id) {
-      io.to(`driver:${driver_id}`).emit("rideCancelledByUser", {
-        bookingId,
-        penalty,
-      });
+      // io.to(`driver:${driver_id}`).emit("rideCancelledByUser", {
+      //   bookingId,
+      //   penalty,
+      // });
+       io.to(`driver:${driver_id}`).emit("booking:cancelledByUser", {
+          bookingId,
+          penalty,
+          message: "User cancelled ride",
+        });
     }
 
     return socket.emit("cancelRideByUser:success", {

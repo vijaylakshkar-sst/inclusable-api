@@ -657,10 +657,33 @@ exports.confirmSetupIntent = async (req, res) => {
     const userId = req.user.userId;
     const { setup_intent_id, stripe_key } = req.body;
 
+    // ✅ Validate stripe_key
+    if (!["test", "production"].includes(stripe_key)) {
+      return res.status(400).json({
+        status: false,
+        message: "Invalid stripe_key (use test or production)",
+      });
+    }
+
+    // ✅ Validate setup_intent_id
+    if (!setup_intent_id || typeof setup_intent_id !== "string") {
+      return res.status(400).json({
+        status: false,
+        message: "setup_intent_id is required",
+      });
+    }
+
     const { rows: keyRows } = await pool.query(
       `SELECT secret_key FROM stripe_keys WHERE environment=$1 LIMIT 1`,
       [stripe_key]
     );
+
+    if (!keyRows.length) {
+      return res.status(404).json({
+        status: false,
+        message: "Stripe secret key not found for this environment",
+      });
+    }
 
     const stripe = require("stripe")(keyRows[0].secret_key);
 
@@ -669,7 +692,14 @@ exports.confirmSetupIntent = async (req, res) => {
       [userId]
     );
 
-    const customerId = rows[0].stripe_customer_id;
+    const customerId = rows[0]?.stripe_customer_id;
+
+    if (!customerId) {
+      return res.status(404).json({
+        status: false,
+        message: "Stripe customer not found for this user",
+      });
+    }
 
     const setupIntent = await stripe.setupIntents.retrieve(setup_intent_id);
 
@@ -680,9 +710,7 @@ exports.confirmSetupIntent = async (req, res) => {
       });
     }
 
-    const newPm = await stripe.paymentMethods.retrieve(
-      setupIntent.payment_method
-    );
+    const newPm = await stripe.paymentMethods.retrieve(setupIntent.payment_method);
 
     const existingCards = await stripe.paymentMethods.list({
       customer: customerId,
@@ -690,29 +718,27 @@ exports.confirmSetupIntent = async (req, res) => {
     });
 
     const duplicate = existingCards.data.find(
-      pm =>
+      (pm) =>
         pm.card?.fingerprint === newPm.card?.fingerprint &&
         pm.id !== newPm.id
     );
 
     if (duplicate) {
       await stripe.paymentMethods.detach(newPm.id);
-
       return res.json({
         status: false,
         message: "This card already exists",
       });
     }
 
-    // Optional: set default card
     await stripe.customers.update(customerId, {
       invoice_settings: { default_payment_method: newPm.id },
     });
 
-    res.json({ status: true, message: "Card saved successfully" });
+    return res.json({ status: true, message: "Card saved successfully" });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ status: false, message: err.message });
+    console.error("confirmSetupIntent error:", err);
+    return res.status(500).json({ status: false, message: err.message });
   }
 };
 

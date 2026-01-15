@@ -42,7 +42,6 @@ exports.createCompanyEvent = async (req, res) => {
 
     const features = subscription?.plan?.features;
     const maxAllowed = features?.maxEventPosts;
-// console.log(subscription);
 
     if (subscription.role !== 'Company') {
       deleteUploadedFiles(req.files);
@@ -66,17 +65,17 @@ exports.createCompanyEvent = async (req, res) => {
     const postedCount = parseInt(rows[0].total_events, 10);
 
     // LIMIT EXCEEDED → STOP + CLEANUP
-    if (maxAllowed !== 'Unlimited' && postedCount >= maxAllowed) {
-      deleteUploadedFiles(req.files);
+    // if (maxAllowed !== 'Unlimited' && postedCount >= maxAllowed) {
+    //   deleteUploadedFiles(req.files);
 
-      return res.status(403).json({
-        status: false,
-        message: `You’ve reached your monthly limit of ${maxAllowed} events.`,
-        current_plan: subscription.plan.name,
-        upgrade_suggestion:
-          subscription.plan.type === 'starter' ? 'growth' : 'professional'
-      });
-    }
+    //   return res.status(403).json({
+    //     status: false,
+    //     message: `You’ve reached your monthly limit of ${maxAllowed} events.`,
+    //     current_plan: subscription.plan.name,
+    //     upgrade_suggestion:
+    //       subscription.plan.type === 'starter' ? 'growth' : 'professional'
+    //   });
+    // }
 
     // ===========================
     //  PAID TICKET CHECK
@@ -100,14 +99,14 @@ exports.createCompanyEvent = async (req, res) => {
       longitude
     } = req.body;
 
-    if (price_type === 'paid' && !features.canAccessPaidTicket) {
-      deleteUploadedFiles(req.files);
-      return res.status(400).json({
-        status: false,
-        message: `Your current plan (“${subscription.plan.name}”) does not allow paid ticketing. Please upgrade to enable this feature.`,
-        upgrade_suggestion: 'growth'
-      });
-    }
+    // if (price_type === 'paid' && !features.canAccessPaidTicket) {
+    //   deleteUploadedFiles(req.files);
+    //   return res.status(400).json({
+    //     status: false,
+    //     message: `Your current plan (“${subscription.plan.name}”) does not allow paid ticketing. Please upgrade to enable this feature.`,
+    //     upgrade_suggestion: 'growth'
+    //   });
+    // }
 
     // ===========================
     //  FILE PROCESSING
