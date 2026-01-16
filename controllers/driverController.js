@@ -464,80 +464,86 @@ exports.getBookings = async (req, res) => {
 };
 
 exports.getBookingDetails = async (req, res) => {
-    const user_id = req.user?.userId;
-    const { bookingId } = req.params;
+  const user_id = req.user?.userId;
+  const { bookingId } = req.params;
 
-    if (!user_id) {
-        return res.status(401).json({
-            status: false,
-            message: "Unauthorized",
-        });
+  if (!user_id) {
+    return res.status(401).json({
+      status: false,
+      message: "Unauthorized",
+    });
+  }
+
+  const client = await pool.connect();
+
+  try {
+    const bookingQuery = `
+      SELECT
+        b.id,
+        b.booking_type,
+        b.booking_mode,
+        b.pickup_address,
+        b.drop_address,
+        b.pickup_lat,
+        b.pickup_lng,
+        b.drop_lat,
+        b.drop_lng,
+        b.scheduled_time,
+        b.distance_km,
+        b.estimated_fare,
+        b.payment_status,
+        b.booking_otp,
+        b.booking_verified,
+        b.status,
+        b.created_at,
+
+        -- Passenger
+        u.id AS passenger_id,
+        u.full_name AS passenger_name,
+        u.phone_number AS passenger_phone,
+
+        -- ✅ Full Image URL
+        CASE 
+          WHEN u.profile_image IS NULL OR u.profile_image = '' THEN NULL
+          ELSE CONCAT($2::text, u.profile_image)
+        END AS passenger_image_url,
+
+        -- Cab Type
+        ct.name AS cab_type_name
+
+      FROM cab_bookings b
+      JOIN users u ON b.user_id = u.id
+      LEFT JOIN cab_types ct ON b.cab_type_id = ct.id
+      WHERE b.id = $1
+      LIMIT 1
+    `;
+
+    const image_url = `${BASE_IMAGE_URL}/`;
+    const bookingRes = await client.query(bookingQuery, [
+      bookingId,
+      image_url, // example: "https://yourdomain.com/"
+    ]);
+
+    if (!bookingRes.rowCount) {
+      return res.status(404).json({
+        status: false,
+        message: "Booking not found",
+      });
     }
 
-    const client = await pool.connect();
-
-    try {      
-
-        // 2️⃣ Fetch booking details
-        const bookingQuery = `
-            SELECT
-                b.id,
-                b.booking_type,
-                b.booking_mode,
-                b.pickup_address,
-                b.drop_address,
-                b.pickup_lat,
-                b.pickup_lng,
-                b.drop_lat,
-                b.drop_lng,
-                b.scheduled_time,
-                b.distance_km,
-                b.estimated_fare,
-                b.payment_status,
-                b.booking_otp,
-                b.booking_verified,
-                b.status,
-                b.created_at,
-
-                -- Passenger
-                u.full_name AS passenger_name,
-                u.phone_number AS passenger_phone,        
-
-                -- Cab Type
-                ct.name AS cab_type_name
-
-            FROM cab_bookings b
-            JOIN users u ON b.user_id = u.id
-            LEFT JOIN cab_types ct ON b.cab_type_id = ct.id
-            WHERE b.id = $1
-            LIMIT 1
-        `;
-
-        const bookingRes = await client.query(bookingQuery, [
-            bookingId,
-        ]);
-
-        if (!bookingRes.rowCount) {
-            return res.status(404).json({
-                status: false,
-                message: "Booking not found or not assigned to this driver",
-            });
-        }
-
-        // 3️⃣ Success response
-        res.status(200).json({
-            status: true,
-            data: bookingRes.rows[0],
-        });
-    } catch (err) {
-        console.error("❌ Error fetching booking details:", err.message);
-        res.status(500).json({
-            status: false,
-            message: "Server error while fetching booking details",
-        });
-    } finally {
-        client.release();
-    }
+    res.status(200).json({
+      status: true,
+      data: bookingRes.rows[0],
+    });
+  } catch (err) {
+    console.error("❌ Error fetching booking details:", err.message);
+    res.status(500).json({
+      status: false,
+      message: "Server error while fetching booking details",
+    });
+  } finally {
+    client.release();
+  }
 };
 
 exports.updateLocation = async (req, res) => {
@@ -1466,89 +1472,121 @@ exports.assignScheduledBookings = async (req, res) => {
 
 async function broadcastScheduledBooking(booking) {
 
-    // 🔁 Radius per attempt
-    const radiusByAttempt = [5, 8, 12];
-    const radius =
-        radiusByAttempt[booking.assign_attempts] || 15;
+  // 🔁 Radius per attempt
+  const radiusByAttempt = [5, 8, 12];
+  const radius = radiusByAttempt[booking.assign_attempts] || 15;
 
+  // ✅ 0️⃣ Get Passenger Details (ONLY ONCE)
+  const userRes = await pool.query(
+    `
+      SELECT 
+        id,
+        full_name,
+        phone_number,
+        profile_image
+      FROM users
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [booking.user_id]
+  );
 
-    // 1️⃣ Find nearby drivers
-    const drivers = await pool.query(`
-    SELECT t.id, t.user_id
-        FROM (
-            SELECT 
-                d.id,
-                d.user_id,
-                (
-                    6371 * acos(
-                        cos(radians($1)) * cos(radians(d.current_lat)) *
-                        cos(radians(d.current_lng) - radians($2)) +
-                        sin(radians($1)) * sin(radians(d.current_lat))
-                    )
-                ) AS distance
-            FROM drivers d
-            WHERE d.is_available = true
-            AND d.status = 'online'
-            AND d.cab_type_id = $3
-            AND d.current_lat IS NOT NULL
-            AND d.current_lng IS NOT NULL
-            AND (
-                $4::INT IS NULL OR EXISTS (
+  const passenger = userRes.rows[0]
+    ? {
+        passenger_id: userRes.rows[0].id,
+        passenger_name: userRes.rows[0].full_name,
+        passenger_phone: userRes.rows[0].phone_number,
+        passenger_image_url: userRes.rows[0].profile_image
+          ? `${BASE_IMAGE_URL}/${userRes.rows[0].profile_image}`
+          : null,
+      }
+    : null;
+
+  // 1️⃣ Find nearby drivers
+  const drivers = await pool.query(
+    `
+      SELECT t.id, t.user_id
+      FROM (
+          SELECT 
+              d.id,
+              d.user_id,
+              (
+                  6371 * acos(
+                      cos(radians($1)) * cos(radians(d.current_lat)) *
+                      cos(radians(d.current_lng) - radians($2)) +
+                      sin(radians($1)) * sin(radians(d.current_lat))
+                  )
+              ) AS distance
+          FROM drivers d
+          WHERE d.is_available = true
+          AND d.status = 'online'
+          AND d.cab_type_id = $3
+          AND d.current_lat IS NOT NULL
+          AND d.current_lng IS NOT NULL
+          AND (
+              $4::INT IS NULL OR EXISTS (
                 SELECT 1
                 FROM driver_disability_features ddf
                 WHERE ddf.driver_id = d.id
-                    AND ddf.disability_feature_id = $4
-                )
-            )
-        ) t
-        WHERE t.distance <= $5
-        ORDER BY t.distance ASC
-        LIMIT 20
-    `, [
-        booking.pickup_lat,
-        booking.pickup_lng,
-        booking.cab_type_id,
-        booking.disability_features_id,
-        radius
-    ]);
+                  AND ddf.disability_feature_id = $4
+              )
+          )
+      ) t
+      WHERE t.distance <= $5
+      ORDER BY t.distance ASC
+      LIMIT 20
+    `,
+    [
+      booking.pickup_lat,
+      booking.pickup_lng,
+      booking.cab_type_id,
+      booking.disability_features_id,
+      radius,
+    ]
+  );
 
-    if (!drivers.rowCount) {
-        await pool.query(`
-      UPDATE cab_bookings
-      SET assign_attempts = assign_attempts + 1
-      WHERE id = $1
-    `, [booking.id]);
+  if (!drivers.rowCount) {
+    await pool.query(
+      `
+        UPDATE cab_bookings
+        SET assign_attempts = assign_attempts + 1
+        WHERE id = $1
+      `,
+      [booking.id]
+    );
+    return false;
+  }
 
-        return false;
-    }
+  const driverIds = new Set();
 
-    const driverIds = new Set();
+  for (const driver of drivers.rows) {
+    driverIds.add(driver.id);
 
-    for (const driver of drivers.rows) {
-        driverIds.add(driver.id);
+    await sendNotificationToDriver({
+      driverUserId: driver.user_id,
+      title: "Scheduled Ride Available",
+      message: `Pickup at ${booking.pickup_address}`,
+      type: "Booking",
+      booking_id: String(booking.id),
+      image_url: `${BASE_IMAGE_URL}/icons/check-xmark.png`,
+      bg_color: "#DF1D17",
+      data: {
+        screen: "BookingDetails",
+        sound: "default",
+      },
+    });
 
-        await sendNotificationToDriver({
-            driverUserId: driver.user_id,
-            title: 'Scheduled Ride Available',
-            message: `Pickup at ${booking.pickup_address}`,
-            type: 'Booking',
-            booking_id: String(booking.id),
-            image_url: `${BASE_IMAGE_URL}/icons/check-xmark.png`,
-            bg_color: '#DF1D17',
-            data: {
-                screen: 'BookingDetails',
-                sound: 'default',
-            }
-        });
+    const io = getIO();
 
-        const io = getIO();
+    // ✅ Send booking + passenger details
+    io.to(`driver:${driver.id}`).emit("booking:new", {
+      ...booking,
+      is_scheduled: true,
+      passenger, // ✅ here
+    });
+  }
 
-        io.to(`driver:${driver.id}`).emit("booking:new", {
-            ...booking,
-            is_scheduled: true
-        });
-    }
-    return true;
+  return true;
 }
 
 exports.cancelExpiredBookings = async (req, res) => {
