@@ -476,66 +476,45 @@ exports.getBookingDetails = async (req, res) => {
 
     const client = await pool.connect();
 
-    try {
-        // 1️⃣ Get driver linked to user
-        const driverRes = await client.query(
-            "SELECT id, vehicle_number FROM drivers WHERE user_id = $1 LIMIT 1",
-            [user_id]
-        );
-
-        if (!driverRes.rowCount) {
-            return res.status(404).json({
-                status: false,
-                message: "Driver profile not found",
-            });
-        }
-
-        const driverId = driverRes.rows[0].id;
+    try {      
 
         // 2️⃣ Fetch booking details
         const bookingQuery = `
-      SELECT
-        b.id,
-        b.booking_type,
-        b.booking_mode,
-        b.pickup_address,
-        b.drop_address,
-        b.pickup_lat,
-        b.pickup_lng,
-        b.drop_lat,
-        b.drop_lng,
-        b.scheduled_time,
-        b.distance_km,
-        b.estimated_fare,
-        b.payment_status,
-        b.booking_otp,
-        b.booking_verified,
-        b.status,
-        b.created_at,
+            SELECT
+                b.id,
+                b.booking_type,
+                b.booking_mode,
+                b.pickup_address,
+                b.drop_address,
+                b.pickup_lat,
+                b.pickup_lng,
+                b.drop_lat,
+                b.drop_lng,
+                b.scheduled_time,
+                b.distance_km,
+                b.estimated_fare,
+                b.payment_status,
+                b.booking_otp,
+                b.booking_verified,
+                b.status,
+                b.created_at,
 
-        -- Passenger
-        u.full_name AS passenger_name,
-        u.phone_number AS passenger_phone,
+                -- Passenger
+                u.full_name AS passenger_name,
+                u.phone_number AS passenger_phone,        
 
-        -- Driver
-        d.vehicle_number,
-        d.license_number,
+                -- Cab Type
+                ct.name AS cab_type_name
 
-        -- Cab Type
-        ct.name AS cab_type_name
-
-      FROM cab_bookings b
-      JOIN drivers d ON b.driver_id = d.id
-      JOIN users u ON b.user_id = u.id
-      LEFT JOIN cab_types ct ON b.cab_type_id = ct.id
-      WHERE b.id = $1
-        AND b.driver_id = $2
-      LIMIT 1
-    `;
+            FROM cab_bookings b
+            JOIN users u ON b.user_id = u.id
+            LEFT JOIN cab_types ct ON b.cab_type_id = ct.id
+            WHERE b.id = $1
+            LIMIT 1
+        `;
 
         const bookingRes = await client.query(bookingQuery, [
             bookingId,
-            driverId,
         ]);
 
         if (!bookingRes.rowCount) {

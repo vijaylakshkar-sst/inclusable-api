@@ -179,14 +179,23 @@ module.exports = (io, socket) => {
 
     await pool.query(
       `UPDATE cab_bookings
-       SET status='cancelled',
-          is_available=true,
-          status='cancelled',
+       SET status='cancelled',          
            payment_status='partial_paid',
            updated_at=NOW()
        WHERE id=$1`,
       [bookingId]
     );
+
+    if (driver_id) {
+      await pool.query(
+        `UPDATE drivers
+        SET is_available = true,
+            updated_at = NOW()
+        WHERE id = $1`,
+        [driver_id]
+      );
+    }
+    
 
     // notify driver (if assigned)
     if (driver_id) {

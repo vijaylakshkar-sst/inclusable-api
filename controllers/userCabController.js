@@ -902,3 +902,91 @@ exports.makeDefaultCard = async (req, res) => {
     res.status(500).json({ status: false, message: err.message });
   }
 };
+
+exports.getCurrentBooking = async (req, res) => {
+  const user_id = req.user?.userId;
+
+  if (!user_id) {
+    return res.status(401).json({ status: false, message: "Unauthorized" });
+  }
+
+  const client = await pool.connect();
+
+  try {
+   const query = `
+      SELECT 
+        b.id,
+        b.booking_type,
+        b.pickup_address,
+        b.drop_address,
+        b.pickup_lat,
+        b.pickup_lng,
+        b.drop_lat,
+        b.drop_lng,
+        b.scheduled_time,
+        b.distance_km,
+        b.estimated_fare,
+        b.status,
+        b.booking_mode,
+        b.booking_otp,
+        b.booking_verified,
+        b.created_at,
+
+        -- Passenger
+        u.full_name AS passenger_name,
+        u.phone_number AS passenger_phone,
+
+        -- Cab Type
+        ct.name AS cab_type_name,
+
+        -- Driver (from drivers table)
+        d.id AS driver_id,
+        d.vehicle_number,
+        d.current_lat AS driver_lat,
+        d.current_lng AS driver_lng,
+        d.is_available AS driver_available,
+        d.status AS driver_status,
+
+        -- Driver user details
+        du.full_name AS driver_name,
+        du.phone_number AS driver_phone,
+        du.profile_image AS driver_image
+
+      FROM cab_bookings b
+      LEFT JOIN users u ON b.user_id = u.id
+      LEFT JOIN cab_types ct ON b.cab_type_id = ct.id
+      LEFT JOIN drivers d ON b.driver_id = d.id
+      LEFT JOIN users du ON d.user_id = du.id
+
+      WHERE b.user_id = $1
+      AND b.status IN ('pending', 'accepted', 'in_progress')
+      AND b.created_at >= NOW() - INTERVAL '24 hours'
+      ORDER BY b.created_at DESC
+      LIMIT 1;
+    `;
+
+    const bookingResult = await client.query(query, [user_id]);
+
+    if (!bookingResult.rowCount) {
+      return res.status(200).json({
+        status: true,
+        message: "No current booking found",
+        data: null,
+      });
+    }
+
+    return res.status(200).json({
+      status: true,
+      data: bookingResult.rows[0],
+    });
+  } catch (err) {
+    console.error("❌ Error fetching current booking:", err.message);
+    return res.status(500).json({
+      status: false,
+      message: "Server error while fetching booking",
+      error: err.message,
+    });
+  } finally {
+    client.release();
+  }
+};

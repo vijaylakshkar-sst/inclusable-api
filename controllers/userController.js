@@ -1495,24 +1495,28 @@ exports.getNotifications = async (req, res) => {
   const { user_id, driver_id, target, is_read, page = 1, limit = 20 } = req.query;
 
   try {
-    // Convert pagination to integers safely
-    const parsedLimit = parseInt(limit, 10);
-    const parsedPage = parseInt(page, 10);
-    const safeLimit = !isNaN(parsedLimit) && parsedLimit > 0 ? parsedLimit : 20;
-    const safePage = !isNaN(parsedPage) && parsedPage > 0 ? parsedPage : 1;
+    const safeLimit = Math.max(parseInt(limit) || 20, 1);
+    const safePage = Math.max(parseInt(page) || 1, 1);
     const offset = (safePage - 1) * safeLimit;
 
-    // Base query
     let query = `
-      SELECT n.*, 
-             u.full_name AS user_name
+      SELECT 
+        n.*,
+        u.full_name AS user_name,
+
+        -- Cab booking details
+        cb.id AS cab_booking_id,
+        cb.status AS cab_booking_status
+
       FROM notifications n
       LEFT JOIN users u ON n.user_id = u.id
+      LEFT JOIN cab_bookings cb ON n.booking_id = cb.id
+      LEFT JOIN company_events ce ON n.company_event_id = ce.id
       WHERE 1=1
     `;
+
     const values = [];
 
-    // Apply filters dynamically
     if (user_id) {
       values.push(user_id);
       query += ` AND n.user_id = $${values.length}`;
@@ -1529,24 +1533,25 @@ exports.getNotifications = async (req, res) => {
     }
 
     if (is_read !== undefined) {
-      values.push(is_read === "true"); // Convert to boolean
+      values.push(is_read === "true");
       query += ` AND n.is_read = $${values.length}`;
     }
 
-    // Count total notifications (for pagination info)
-    const countQuery = `SELECT COUNT(*) AS total FROM (${query}) AS count_query`;
+    // Count query
+    const countQuery = `SELECT COUNT(*) FROM (${query}) count_query`;
     const countResult = await pool.query(countQuery, values);
-    const totalCount = parseInt(countResult.rows[0].total, 10);
+    const totalCount = parseInt(countResult.rows[0].count, 10);
 
-    // Add ordering and pagination
-    values.push(safeLimit);
-    values.push(offset);
-    query += ` ORDER BY n.created_at DESC LIMIT $${values.length - 1} OFFSET $${values.length}`;
+    // Pagination
+    values.push(safeLimit, offset);
+    query += `
+      ORDER BY n.created_at DESC
+      LIMIT $${values.length - 1}
+      OFFSET $${values.length}
+    `;
 
-    // Execute paginated query
     const { rows } = await pool.query(query, values);
 
-    // Send response
     res.status(200).json({
       status: true,
       message: "Notifications fetched successfully",
@@ -1558,11 +1563,10 @@ exports.getNotifications = async (req, res) => {
       data: rows,
     });
   } catch (err) {
-    console.error("❌ Error fetching notifications:", err.message);
+    console.error("❌ Error fetching notifications:", err);
     res.status(500).json({
       status: false,
       message: "Error fetching notifications",
-      error: err.message,
     });
   }
 };

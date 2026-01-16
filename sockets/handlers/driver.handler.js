@@ -178,7 +178,7 @@ module.exports = (io, socket, driverId) => {
 
       const { status: currentStatus, user_id, estimated_fare } =
         bookingRes.rows[0];
-console.log(currentStatus);
+        console.log(currentStatus);
 
       /* =====================================================
          ✅ ACCEPT BOOKING (🔥 FIXED)
@@ -275,6 +275,26 @@ console.log(currentStatus);
           throw new Error("Booking already taken by another driver");
         }
 
+        /* =====================================================
+        🚫 REMOVE BOOKING FROM OTHER DRIVERS (REAL-TIME)
+        ===================================================== */
+
+        const driversSet = bookingDriversMap.get(bookingId);
+
+        if (driversSet) {
+          for (const otherDriverId of driversSet) {
+            if (otherDriverId !== driverId) {
+              io.to(`driver:${otherDriverId}`).emit("booking:removed", {
+                bookingId,
+                reason: "Ride accepted by another driver",
+              });
+            }
+          }
+        }
+
+        // cleanup
+        bookingDriversMap.delete(bookingId);
+
         await client.query(
           "UPDATE drivers SET is_available = false WHERE id = $1",
           [driverId]
@@ -301,7 +321,7 @@ console.log(currentStatus);
 
         const driverRes = await client.query(
             `
-            SELECT u.full_name
+            SELECT u.full_name, d.vehicle_number
             FROM drivers d
             JOIN users u ON u.id = d.user_id
             WHERE d.id = $1
@@ -310,6 +330,7 @@ console.log(currentStatus);
           );
 
           const drivername = driverRes.rows[0]?.full_name || "Driver";
+          const vehicle_number = driverRes.rows[0]?.vehicle_number || "N/A";
 
         bookingDriversMap.delete(bookingId);
 
@@ -329,6 +350,14 @@ console.log(currentStatus);
           bookingId,
           driverId,
           drivername,
+        });
+        io.to(`booking:${bookingId}`).emit("booking:state", {
+          bookingId,
+          status: "accepted",
+          driverId,
+          drivername,
+          vehicle_number: vehicle_number,
+          otp: booking.booking_otp,
         });
 
         return;
@@ -402,6 +431,12 @@ console.log(currentStatus);
           bookingId,
           cancelledBy: "driver",
         });
+
+        io.to(`booking:${bookingId}`).emit("booking:state", {
+          bookingId,
+          status: "cancelled",
+          cancelledBy: "driver",
+        });
       }
 
     } catch (err) {
@@ -458,10 +493,17 @@ console.log(currentStatus);
     } catch (notifyErr) {
       console.error("🔔 Notification failed:", notifyErr.message);
     }
-      // 🔥 BOTH USER + DRIVER
+
       io.to(`booking:${bookingId}`).emit("verifyOtp:success", {
         bookingId,
         status: "in_progress"
+      });
+
+      // 🔥 BOTH USER + DRIVER
+      io.to(`booking:${bookingId}`).emit("booking:state", {
+        bookingId,
+        status: "in_progress",
+        booking_verified: true
       });
 
     } catch (err) {
@@ -475,7 +517,7 @@ console.log(currentStatus);
   socket.on("completeRide", async ({ bookingId, distance_km, total_fare }) => {
     try {
       const bookingRes = await pool.query(
-        `SELECT payment_intent_id 
+        `SELECT payment_intent_id, driver_id 
        FROM cab_bookings
        WHERE id=$1`,
         [bookingId]
@@ -485,6 +527,7 @@ console.log(currentStatus);
         throw new Error("Booking not found");
 
       const paymentIntentId = bookingRes.rows[0].payment_intent_id;
+      const driverId = bookingRes.rows[0].driver_id;
 
       if (!paymentIntentId)
         throw new Error("No payment intent found for this booking");
@@ -543,6 +586,14 @@ console.log(currentStatus);
         amount: total_fare,
         payment_status: stripeRes.status,
         message: "Ride completed & payment captured"
+      });
+      
+      io.to(`booking:${bookingId}`).emit("booking:state", {
+        bookingId,
+        status: "completed",
+        payment_status: stripeRes.status,
+        total_fare,
+        distance_km
       });
 
     } catch (err) {
