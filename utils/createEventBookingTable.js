@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS event_bookings (
   event_price NUMERIC(10,2),
   number_of_tickets INTEGER,
   total_amount NUMERIC(10,2),
+  event_booking_date DATE DEFAULT CURRENT_DATE, 
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 `;

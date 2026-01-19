@@ -120,7 +120,6 @@ exports.findCabTypesWithFare = async (req, res) => {
 
     client.release();
 
-    // 🔥 Transform response into two groups
     const standard_cabs = [];
     const disability_cabs = [];
 
@@ -130,7 +129,8 @@ exports.findCabTypesWithFare = async (req, res) => {
           ? `${BASE_IMAGE_URL}/${cab.thumbnail_url}`
           : null;
 
-      const distance = Number(cab.distance_km);
+      // ✅ FIX #1: match WebSocket distance rounding
+      const distance = Number(Number(cab.distance_km).toFixed(2));
 
       // Standard cab pricing
       if (cab.standard_price) {
@@ -140,7 +140,11 @@ exports.findCabTypesWithFare = async (req, res) => {
           thumbnail_url: fullThumbnail,
           price_per_km: cab.standard_price,
           distance_km: distance,
-          total_price: Math.round(distance * cab.standard_price),
+
+          // ✅ FIX #2: same rounding logic
+          total_price: Number(
+            (distance * cab.standard_price).toFixed(0)
+          ),
         });
       }
 
@@ -152,12 +156,13 @@ exports.findCabTypesWithFare = async (req, res) => {
           thumbnail_url: fullThumbnail,
           price_per_km: cab.disability_feature_price,
           distance_km: distance,
-          total_price: Math.round(distance * cab.disability_feature_price),
+          total_price: Number(
+            (distance * cab.disability_feature_price).toFixed(0)
+          ),
         });
       }
     });
 
-    // Sort by price (cheap → costly)
     standard_cabs.sort((a, b) => a.total_price - b.total_price);
     disability_cabs.sort((a, b) => a.total_price - b.total_price);
 
@@ -913,7 +918,9 @@ exports.getCurrentBooking = async (req, res) => {
   const client = await pool.connect();
 
   try {
-   const query = `
+    const BASE_IMAGE_URL = process.env.BASE_IMAGE_URL;
+
+    const query = `
       SELECT 
         b.id,
         b.booking_type,
@@ -938,6 +945,7 @@ exports.getCurrentBooking = async (req, res) => {
 
         -- Cab Type
         ct.name AS cab_type_name,
+        ct.thumbnail_url AS cab_image,
 
         -- Driver (from drivers table)
         d.id AS driver_id,
@@ -950,7 +958,17 @@ exports.getCurrentBooking = async (req, res) => {
         -- Driver user details
         du.full_name AS driver_name,
         du.phone_number AS driver_phone,
-        du.profile_image AS driver_image
+        du.profile_image AS driver_image,
+
+        -- ⭐ Average driver rating
+        COALESCE(
+          (
+            SELECT ROUND(AVG(r.rating)::numeric, 1)
+            FROM driver_reviews r
+            WHERE r.driver_id = d.id
+          ),
+          5.0
+        ) AS driver_rating
 
       FROM cab_bookings b
       LEFT JOIN users u ON b.user_id = u.id
@@ -975,9 +993,20 @@ exports.getCurrentBooking = async (req, res) => {
       });
     }
 
+    const row = bookingResult.rows[0];
+
+    // ✅ Full Image URL
+    row.driver_image = row?.driver_image
+      ? `${BASE_IMAGE_URL}/${row.driver_image}`
+      : null;
+
+    row.cab_image = row?.cab_image
+      ? `${BASE_IMAGE_URL}/${row.cab_image}`
+      : null;
+
     return res.status(200).json({
       status: true,
-      data: bookingResult.rows[0],
+      data: row,
     });
   } catch (err) {
     console.error("❌ Error fetching current booking:", err.message);

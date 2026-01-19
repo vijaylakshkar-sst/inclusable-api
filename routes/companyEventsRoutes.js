@@ -8,13 +8,14 @@ const { checkCompanyEventLimit } = require('../middleware/checkCompanyEventLimit
 
 // Form-data upload with image fields
 router.post(
-  '/company-events/create',
+  '/company-events/create', 
   auth,
   // checkFeatureAccess('canPostEvents'),  
   // checkCompanyEventLimit,
   upload.fields([
     { name: 'event_thumbnail', maxCount: 1 },
-    { name: 'event_images', maxCount: 10 }
+    { name: 'event_images', maxCount: 10 },
+    { name: 'accessibility_images', maxCount: 10 }
   ]),
   companyEventsController.createCompanyEvent
 );
@@ -28,13 +29,15 @@ router.put(
   auth,
   upload.fields([
     { name: 'event_thumbnail', maxCount: 1 },
-    { name: 'event_images', maxCount: 10 }
+    { name: 'event_images', maxCount: 10 },
+    { name: 'accessibility_images', maxCount: 10 }
   ]),
   companyEventsController.updateCompanyEvent
 );
 router.get('/company-events-bookings', auth, companyEventsController.getBookingsByCompany);
 router.get('/company-events-bookings/:id', auth, companyEventsController.getBookingById);
 router.delete('/company-events/:id/image', auth,companyEventsController.deleteCompanyEventImage);
+
 
 router.post('/partner-events',  companyEventsController.getEvents);
 router.get('/partner-events/:id', companyEventsController.getEventById); // details

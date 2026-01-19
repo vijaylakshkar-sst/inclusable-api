@@ -37,6 +37,7 @@ exports.getUserBookings = async (req, res) => {
         eb.company_id,
         u.business_name AS company_name,
         eb.event_price,
+        eb.event_booking_date,
         eb.number_of_tickets,
         eb.total_amount,
         eb.status,
@@ -95,6 +96,8 @@ exports.getUserBookingById = async (req, res) => {
         ce.price_type,
         ce.how_to_reach_destination,
         ce.event_description,
+        ce.latitude,
+        ce.longitude,
         u.business_name AS company_name
       FROM event_bookings eb
       JOIN company_events ce ON eb.event_id = ce.id
@@ -126,5 +129,61 @@ exports.getUserBookingById = async (req, res) => {
   } catch (err) {
     console.error('Get Booking Details Error:', err.message);
     res.status(500).json({ status: false, error: 'Failed to fetch booking details' });
+  }
+};
+
+exports.getEventSeatAvailability = async (req, res) => {
+  const { eventId } = req.params;
+  const { date } = req.query;
+
+  if (!date) {
+    return res.status(400).json({
+      status: false,
+      message: "Date is required (YYYY-MM-DD)",
+    });
+  }
+
+  try {
+    const result = await pool.query(
+      `
+      SELECT
+        ce.id AS event_id,
+        ce.total_available_seats,
+        COALESCE(SUM(eb.number_of_tickets), 0) AS booked_seats,
+        (ce.total_available_seats - COALESCE(SUM(eb.number_of_tickets), 0)) AS available_seats
+      FROM company_events ce
+      LEFT JOIN event_bookings eb
+        ON eb.event_id = ce.id
+        AND eb.event_booking_date = $2
+        AND eb.status IN ('confirmed')
+      WHERE ce.id = $1
+      GROUP BY ce.id
+      `,
+      [eventId, date]
+    );
+
+    if (!result.rows.length) {
+      return res.status(404).json({
+        status: false,
+        message: "Event not found",
+      });
+    }
+
+    res.json({
+      status: true,
+      data: {
+        event_id: result.rows[0].event_id,
+        date,
+        total_seats: result.rows[0].total_seats,
+        booked_seats: result.rows[0].booked_seats,
+        available_seats: result.rows[0].available_seats,
+      },
+    });
+  } catch (err) {
+    console.error("❌ Availability error:", err);
+    res.status(500).json({
+      status: false,
+      message: "Server error",
+    });
   }
 };

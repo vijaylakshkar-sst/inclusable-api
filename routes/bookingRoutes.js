@@ -5,6 +5,7 @@ const auth = require('../middleware/auth');
 
 router.get('/user-bookings', auth, bookingController.getUserBookings);
 router.get('/user-bookings/:id', auth, bookingController.getUserBookingById);
+router.get('/events/:eventId/availability', auth, bookingController.getEventSeatAvailability);
 
 
 module.exports = router; 

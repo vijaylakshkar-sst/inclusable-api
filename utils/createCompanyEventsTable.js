@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS company_events (
   price_type TEXT,
   price NUMERIC(10, 2),
   total_available_seats INTEGER,
-  
+  accessibility_images TEXT[],
   event_address TEXT,
   how_to_reach_destination TEXT,
   latitude DOUBLE PRECISION DEFAULT NULL,

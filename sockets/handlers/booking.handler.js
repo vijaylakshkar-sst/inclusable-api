@@ -163,10 +163,12 @@ module.exports = (io, socket) => {
         R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)))
       ).toFixed(2);
 
-      const estimated_fare = +(
-        (cabType.base_fare || 0) +
-        distance_km * cabType.standard_price
-      ).toFixed(2);
+     const raw_fare =
+      (cabType.base_fare || 0) +
+      distance_km * cabType.standard_price;
+
+    // ✅ ALWAYS ROUND UP
+    const estimated_fare = Math.ceil(raw_fare);
 
       // ===============================
       // FIND ALL DRIVERS WITHIN 5 KM
@@ -201,7 +203,7 @@ module.exports = (io, socket) => {
             )
         ) t
         WHERE t.distance <= 5
-      `;
+        `;
 
         const driverRes = await client.query(driverQuery, [
           cab_type_id,
