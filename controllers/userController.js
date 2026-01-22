@@ -545,19 +545,31 @@ exports.login = async (req, res) => {
       process.env.JWT_SECRET,   // ✅ FIX
       { expiresIn: "7d" }
     );
-
+    
     // Update FCM token if provided
-    if (fcm_token && fcm_token.trim() !== '') {
+    if(user.role != "Admin"){
+      if (fcm_token && fcm_token.trim() !== '') {
+        await client.query(
+          `UPDATE users 
+          SET active_token = $1, 
+              fcm_token = $2, 
+              last_login_at = NOW() 
+          WHERE id = $3`,
+          [token, fcm_token || null, user.id]
+        );
+        console.log(`✅ FCM token updated for user ID: ${user.id}`);
+      }
+    }else{
       await client.query(
         `UPDATE users 
         SET active_token = $1, 
-            fcm_token = $2, 
             last_login_at = NOW() 
-        WHERE id = $3`,
-        [token, fcm_token || null, user.id]
+        WHERE id = $2`,
+        [token, user.id]
       );
       console.log(`✅ FCM token updated for user ID: ${user.id}`);
     }
+    
 
     const userId = user.id;
 

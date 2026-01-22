@@ -1019,3 +1019,91 @@ exports.getCurrentBooking = async (req, res) => {
     client.release();
   }
 };
+
+
+exports.cancelScheduledBooking = async (req, res) => {
+  const { booking_id } = req.params;
+  const user_id = req.user?.userId;
+
+  try {
+    const client = await pool.connect();
+
+    try {
+      // 1️⃣ Fetch booking
+      const bookingRes = await client.query(
+        `SELECT * FROM cab_bookings WHERE id = $1 AND user_id = $2`,
+        [booking_id, user_id]
+      );
+
+      if (bookingRes.rows.length === 0) {
+        return res.status(404).json({
+          status: false,
+          message: "Booking not found",
+        });
+      }
+
+      const booking = bookingRes.rows[0];
+
+      // ✅ Scheduled ride check (your schema: 'later')
+      if (booking.booking_type !== "later") {
+        return res.status(400).json({
+          status: false,
+          message: "This booking is not a scheduled ride",
+        });
+      }
+
+      // ✅ Only allow cancel when pending / scheduled
+      const allowedCancelStatuses = ["pending", "scheduled"];
+
+      if (!allowedCancelStatuses.includes(booking.status)) {
+        return res.status(400).json({
+          status: false,
+          message: `Booking cannot be cancelled in '${booking.status}' status`,
+        });
+      }
+
+      // ✅ OPTIONAL: cancel allowed before 30 minutes
+      const minsBeforePickup = 15;
+
+      if (booking.scheduled_time) {
+        const pickupTime = new Date(booking.scheduled_time);
+        const now = new Date();
+        const diffMinutes = (pickupTime - now) / (1000 * 60);
+
+        if (diffMinutes < minsBeforePickup) {
+          return res.status(400).json({
+            status: false,
+            message: `You can cancel only before ${minsBeforePickup} minutes of pickup time`,
+          });
+        }
+      }
+
+      await client.query("BEGIN");
+
+      // 2️⃣ Cancel booking
+      await client.query(
+        `UPDATE cab_bookings
+         SET status = 'cancelled',
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1`,
+        [booking_id]
+      );
+
+      await client.query("COMMIT");
+
+      return res.status(200).json({
+        status: true,
+        message: "Scheduled ride cancelled successfully",
+      });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      console.log("❌ Cancel Scheduled Booking Error:", error.message);
+      return res.status(500).json({ status: false, message: "Server Error" });
+    } finally {
+      client.release();
+    }
+  } catch (err) {
+    console.log("❌ DB Connection Error:", err.message);
+    return res.status(500).json({ status: false, message: "Server Error" });
+  }
+};

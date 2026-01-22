@@ -1353,13 +1353,13 @@ exports.cancelBooking = async (req, res) => {
     const { event_id, number_of_tickets } = booking.rows[0];
 
     // Restore seats
-    await client.query(
-      `UPDATE company_events
-       SET total_available_seats = total_available_seats + $1,
-           updated_at = NOW()
-       WHERE id = $2`,
-      [number_of_tickets, event_id]
-    );
+    // await client.query(
+    //   `UPDATE company_events
+    //    SET total_available_seats = total_available_seats + $1,
+    //        updated_at = NOW()
+    //    WHERE id = $2`,
+    //   [number_of_tickets, event_id]
+    // );
 
     // Update booking + transaction
     await client.query(`UPDATE event_bookings SET status = 'cancelled' WHERE id = $1`, [bookingId]);

@@ -9,6 +9,7 @@ router.get('/cab-find-fares',auth, userCabController.findCabTypesWithFare);
 router.post('/cab-booking',auth, userCabController.bookCab);
 router.post('/cab-cancel/:booking_id', auth, userCabController.cancelBooking);
 router.get('/cab-track/:booking_id', auth, userCabController.trackDriver);
+router.put("/cancel-scheduled/:booking_id", auth, userCabController.cancelScheduledBooking);
 router.get('/cab-types', auth, userCabController.cabTypes);
 router.post("/rating-submit", auth, userCabController.submitDriverRating );
 router.post("/setup-intent", auth,  userCabController.createSetupIntent);
