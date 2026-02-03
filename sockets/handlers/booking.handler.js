@@ -161,14 +161,12 @@ module.exports = (io, socket) => {
 
       const distance_km = +(
         R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)))
-      ).toFixed(2);
-
-     const raw_fare =
-      (cabType.base_fare || 0) +
-      distance_km * cabType.standard_price;
+      ).toFixed(2);    
 
     // ✅ ALWAYS ROUND UP
-    const estimated_fare = Math.ceil(raw_fare);
+    const estimated_fare = Number((cabType.base_fare || 0) +
+      distance_km * cabType.standard_price ).toFixed(0);
+
 
       // ===============================
       // FIND ALL DRIVERS WITHIN 5 KM
