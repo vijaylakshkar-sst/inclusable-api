@@ -16,7 +16,8 @@ exports.eventCreateSchema = Joi.object({
   event_address: Joi.string().allow(''),
   how_to_reach_destination: Joi.string().allow(''),
   latitude: Joi.number().allow(null),
-  longitude: Joi.number().allow(null)
+  longitude: Joi.number().allow(null),
+  tickets: Joi.string().allow(null)
 });
 
 exports.eventUpdateSchema = Joi.object({
@@ -35,5 +36,6 @@ exports.eventUpdateSchema = Joi.object({
   event_address: Joi.string().allow(''),
   how_to_reach_destination: Joi.string().allow(''),
   latitude: Joi.number().allow(null),
-  longitude: Joi.number().allow(null)
+  longitude: Joi.number().allow(null),
+  tickets: Joi.string().allow(null)
 });

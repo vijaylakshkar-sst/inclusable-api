@@ -3,7 +3,7 @@ const { eventCreateSchema, eventUpdateSchema } = require('../validators/companyE
 const stripe = require('../stripe');
 const BASE_EVENT_IMAGE_URL = process.env.BASE_EVENT_IMAGE_URL;
 const BASE_IMAGE_URL = process.env.BASE_IMAGE_URL;
-const { sendNotification,sendNotificationToBusiness } = require("../hooks/notification");
+const { sendNotification, sendNotificationToBusiness } = require("../hooks/notification");
 // Fetch user’s plan dynamically
 const { getCurrentAccess } = require('../hooks/checkPermissionHook');
 const fs = require('fs');
@@ -96,8 +96,22 @@ exports.createCompanyEvent = async (req, res) => {
       event_address,
       how_to_reach_destination,
       latitude,
-      longitude
+      longitude,
+      tickets = []
     } = req.body;
+
+    let parsedTickets = [];
+
+    if (tickets) {
+      try {
+        parsedTickets = JSON.parse(tickets);
+      } catch (e) {
+        return res.status(400).json({
+          status: false,
+          error: 'Invalid tickets JSON format'
+        });
+      }
+    }
 
     // if (price_type === 'paid' && !features.canAccessPaidTicket) {
     //   deleteUploadedFiles(req.files);
@@ -183,7 +197,48 @@ exports.createCompanyEvent = async (req, res) => {
       longitude
     ];
 
-    await pool.query(query, values);
+    const { rows: eventData } = await pool.query(query, values);
+
+    const eventId = eventData[0].id;
+
+    // ================= TICKETS INSERT =================
+    if (Array.isArray(parsedTickets) && parsedTickets.length > 0) {
+      const ticketQuery = `
+        INSERT INTO company_event_tickets (
+          company_event_id,
+          ticket_type,
+          price_type,
+          ticket_price,
+          total_seats,
+          ticket_note,
+          allow_companion,
+          companion_ticket_type,
+          companion_price_type,
+          companion_ticket_price,
+          companion_total_seats,
+          companion_ticket_note
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+      `;
+
+      for (const ticket of parsedTickets) {
+        await pool.query(ticketQuery, [
+          eventId,
+          ticket.ticket_type,
+          ticket.price_type,
+          ticket.price_type === 'paid' ? ticket.ticket_price : null,
+          ticket.total_seats || null,
+          ticket.ticket_note || null,
+          ticket.allow_companion || false,
+          ticket.companion_ticket_type,
+          ticket.companion_price_type,
+          ticket.companion_price_type === 'paid' ? ticket.companion_ticket_price : null,
+          ticket.companion_total_seats || null,
+          ticket.companion_ticket_note || null,
+        ]);
+      }
+    }
+
 
     return res.status(201).json({
       status: true,
@@ -228,7 +283,25 @@ exports.updateCompanyEvent = async (req, res) => {
 
     const oldEvent = checkEvent.rows[0];
 
-    // ✅ 2. Handle thumbnail (replace if new uploaded)
+    // ✅ 2. Parse tickets (form-data JSON)
+    let parsedTickets = [];
+    if (req.body.tickets) {
+      try {
+        parsedTickets = JSON.parse(req.body.tickets);
+        if (!Array.isArray(parsedTickets)) {
+          throw new Error();
+        }
+      } catch {
+        await client.query('ROLLBACK');
+        return res.status(400).json({
+          status: false,
+          error: 'Invalid tickets JSON format',
+        });
+      }
+    }
+
+
+    // ✅ 3. Handle thumbnail (replace if new uploaded)
     const thumbnail =
       req.files?.['event_thumbnail']?.[0]?.filename ||
       oldEvent.event_thumbnail;
@@ -250,13 +323,13 @@ exports.updateCompanyEvent = async (req, res) => {
       : [];
 
     const newAccessibilityImages = req.files?.['accessibility_images']
-    ? req.files['accessibility_images'].map((f) => String(f.filename))
-    : [];
+      ? req.files['accessibility_images'].map((f) => String(f.filename))
+      : [];
 
     const mergedAccessibilityImages =
-    newAccessibilityImages.length > 0
-      ? [...oldAccessibilityImages, ...newAccessibilityImages]
-      : oldAccessibilityImages;
+      newAccessibilityImages.length > 0
+        ? [...oldAccessibilityImages, ...newAccessibilityImages]
+        : oldAccessibilityImages;
 
     // ✅ 4. Prepare fields for update
     const fields = [
@@ -321,7 +394,7 @@ exports.updateCompanyEvent = async (req, res) => {
     values.push(mergedImages);
     index++;
 
-    
+
     updates.push(`accessibility_images = $${index}::text[]`);
     values.push(mergedAccessibilityImages);
     index++;
@@ -339,6 +412,53 @@ exports.updateCompanyEvent = async (req, res) => {
     values.push(user_id);
 
     await pool.query(updateQuery, values);
+
+    // ✅ 5. Update tickets (delete + reinsert)
+    if (parsedTickets.length > 0) {
+      await pool.query(
+        'DELETE FROM company_event_tickets WHERE company_event_id = $1',
+        [id]
+      );
+
+      const ticketInsertQuery = `
+        INSERT INTO company_event_tickets (
+          company_event_id,
+          ticket_type,
+          price_type,
+          ticket_price,
+          total_seats,
+          ticket_note,
+          allow_companion,
+          companion_ticket_type,
+          companion_price_type,
+          companion_ticket_price,
+          companion_total_seats,
+          companion_ticket_note
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+      `;
+
+      for (const ticket of parsedTickets) {
+        await pool.query(ticketInsertQuery, [
+          id,
+          ticket.ticket_type,
+          ticket.price_type,
+          ticket.price_type === 'paid' ? ticket.ticket_price : null,
+          ticket.total_seats || null,
+          ticket.ticket_note || null,
+          ticket.allow_companion || false,
+          ticket.companion_ticket_type || null,
+          ticket.companion_price_type || null,
+          ticket.companion_price_type === 'paid'
+            ? ticket.companion_ticket_price
+            : null,
+          ticket.companion_total_seats || null,
+          ticket.companion_ticket_note || null,
+        ]);
+      }
+    }
+
+    await pool.query('COMMIT');
 
     res.json({
       status: true,
@@ -545,6 +665,50 @@ exports.getEventById = async (req, res) => {
 
     const event = result.rows[0];
 
+
+    const ticketsResult = await pool.query(
+      `
+      SELECT
+        id,
+        ticket_type,
+        price_type,
+        ticket_price,
+        total_seats,
+        ticket_note,
+        allow_companion,
+        companion_ticket_type,
+        companion_price_type,
+        companion_ticket_price,
+        companion_total_seats,
+        companion_ticket_note
+      FROM company_event_tickets
+      WHERE company_event_id = $1
+      ORDER BY id ASC
+      `,
+      [id]
+    );
+
+    const tickets = ticketsResult.rows.map((t) => ({
+      id: t.id,
+      ticket_type: t.ticket_type,
+      price_type: t.price_type,
+      ticket_price: t.ticket_price,
+      total_seats: t.total_seats,
+      ticket_note: t.ticket_note,
+      allow_companion: t.allow_companion,
+
+      companion_ticket_type: t.companion_ticket_type,
+      companion_price_type: t.companion_price_type,
+      companion_ticket_price: t.companion_ticket_price,
+      companion_total_seats: t.companion_total_seats,
+      companion_ticket_note: t.companion_ticket_note,
+    }));
+
+    const totalAvailableSeats = ticketsResult.rows.reduce(
+      (sum, t) => sum + (Number(t.total_seats) || 0),
+      0
+    );
+
     // ✅ Safely parse arrays
     const parseStringToArray = (value) => {
       if (!value) return [];
@@ -571,7 +735,7 @@ exports.getEventById = async (req, res) => {
     event.event_images = Array.isArray(event.event_images)
       ? event.event_images.map((img) => `${BASE_EVENT_IMAGE_URL}/${img}`)
       : [];
-    
+
     event.accessibility_images = Array.isArray(event.accessibility_images)
       ? event.accessibility_images.map((img) => `${BASE_EVENT_IMAGE_URL}/${img}`)
       : [];
@@ -675,6 +839,8 @@ exports.getEventById = async (req, res) => {
       status: true,
       data: {
         ...cleanEvent,
+        tickets,
+        totalAvailableSeats,
         company,
         total_bookings: totalBookings,
         latest_bookings: latestBookings,
@@ -922,8 +1088,8 @@ exports.getBookingById = async (req, res) => {
       ? `${BASE_IMAGE_URL}/${booking.user_image}`
       : null;
 
-      console.log(booking,'data');
-      
+    console.log(booking, 'data');
+
     res.json({
       status: true,
       data: booking
@@ -1114,19 +1280,287 @@ exports.getEvents = async (req, res) => {
 };
 
 
+// exports.createEventBooking = async (req, res) => {
+//   const user_id = req.user?.userId;
+//   const {
+//     company_id,
+//     event_id,
+//     event_price = 0.0,
+//     number_of_tickets,
+//     total_amount = 0.0,
+//     attendee_info,
+//     platform_fee = 0.0,
+//     stripe_key,
+//     event_booking_date,
+//   } = req.body;
+
+//   if (!stripe_key || !["test", "production"].includes(stripe_key)) {
+//     return res.status(400).json({
+//       status: false,
+//       message: "Invalid environment. Use 'test' or 'production'.",
+//     });
+//   }
+
+//   const StripeQuery = `
+//     SELECT id, environment, publishable_key
+//     FROM stripe_keys
+//     WHERE environment = $1
+//     LIMIT 1;
+//   `;
+
+//   const resultStripeKey = await pool.query(StripeQuery, [stripe_key]);
+
+//   if (resultStripeKey.rows.length === 0) {
+//     return res.status(404).json({
+//       status: false,
+//       message: "No Stripe keys found for environment: " + stripe_key,
+//     });
+//   }
+
+//   const eventCheck = await pool.query(
+//     `
+//     SELECT id, price_type, total_available_seats
+//     FROM company_events
+//     WHERE id = $1 AND user_id = $2
+//     `,
+//     [event_id, company_id]
+//   );
+
+//   if (!eventCheck.rows.length) {
+//     return res.status(400).json({
+//       status: false,
+//       error: "Invalid event_id or event does not belong to the specified company.",
+//     });
+//   }
+
+//   const eventDataCheck = eventCheck.rows[0];
+
+//   if (eventDataCheck.price_type === "Paid") {
+//     if (!user_id || !event_id || !company_id || !number_of_tickets || !total_amount) {
+//       return res.status(400).json({ status: false, error: "Missing required fields" });
+//     }
+//   } else {
+//     if (!user_id || !event_id || !company_id || !number_of_tickets) {
+//       return res.status(400).json({ status: false, error: "Missing required fields" });
+//     }
+//   }
+
+//   if (attendee_info && attendee_info.length !== number_of_tickets) {
+//     return res
+//       .status(400)
+//       .json({ status: false, error: "Attendee count mismatch with number_of_tickets" });
+//   }
+
+//   const client = await pool.connect();
+
+//   try {
+//     await client.query("BEGIN");
+
+//     // 🔒 STEP 1: Lock event row
+//     const eventLockRes = await client.query(
+//       `
+//       SELECT id, total_available_seats
+//       FROM company_events
+//       WHERE id = $1
+//       FOR UPDATE
+//       `,
+//       [event_id]
+//     );
+
+//     if (!eventLockRes.rows.length) {
+//       throw new Error("Event not found");
+//     }
+
+//     const { total_available_seats } = eventLockRes.rows[0];
+
+//     // 🔢 STEP 2: Calculate booked seats for the given date
+//     const bookedSeatsRes = await client.query(
+//       `
+//       SELECT COALESCE(SUM(number_of_tickets), 0) AS booked_seats
+//       FROM event_bookings
+//       WHERE event_id = $1
+//         AND event_booking_date = $2
+//         AND status IN ('confirmed', 'pending')
+//       `,
+//       [event_id, event_booking_date]
+//     );
+
+//     const bookedSeats = parseInt(bookedSeatsRes.rows[0].booked_seats, 10);
+//     const availableSeats = total_available_seats - bookedSeats;
+
+//     if (availableSeats < number_of_tickets) {
+//       return res.status(400).json({
+//         status: false,
+//         message: `Only ${availableSeats} seats are available on ${event_booking_date}`,
+//       });
+//     }
+
+//     const Feesquery = `
+//       SELECT id, service_type, company_fee, driver_fee, member_fee,
+//              platform_fee, fee_type, updated_at
+//       FROM platform_fees
+//       WHERE service_type = 'Event Booking'
+//       ORDER BY updated_at DESC
+//       LIMIT 1
+//     `;
+//     await pool.query(Feesquery);
+
+//     const status = eventDataCheck.price_type === "Free" ? "confirmed" : "pending";
+
+//     // 1️⃣ Insert booking
+//     const bookingInsertQuery = `
+//       INSERT INTO event_bookings (
+//         user_id, company_id, event_id, event_price, number_of_tickets,
+//         total_amount, attendee_info, status, platform_fee, event_booking_date
+//       )
+//       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+//       RETURNING id
+//     `;
+
+//     const bookingResult = await client.query(bookingInsertQuery, [
+//       user_id,
+//       company_id,
+//       event_id,
+//       event_price || null,
+//       number_of_tickets,
+//       total_amount,
+//       JSON.stringify(attendee_info || []),
+//       status,
+//       platform_fee,
+//       event_booking_date,
+//     ]);
+
+//     const booking_id = bookingResult.rows[0].id;
+
+//     // 3️⃣ Stripe payment (Paid only)
+//     let paymentIntent = null;
+//     if (eventDataCheck.price_type === "Paid") {
+//       paymentIntent = await stripe.paymentIntents.create({
+//         amount: Math.round(total_amount * 100),
+//         currency: "aud",
+//         metadata: { booking_id, user_id, event_id },
+//       });
+
+//       await client.query(
+//         `
+//         INSERT INTO transactions
+//         (booking_id, user_id, event_id, payment_intent_id, amount, currency, status)
+//         VALUES ($1,$2,$3,$4,$5,$6,$7)
+//         `,
+//         [booking_id, user_id, event_id, paymentIntent.id, total_amount, "aud", "pending"]
+//       );
+//     }
+
+//     // 4️⃣ Notification for free events
+//     if (eventDataCheck.price_type === "Free") {
+//       const userData = await pool.query("SELECT * FROM users WHERE id = $1", [user_id]);
+//       const eventData = await pool.query(
+//         `SELECT id, event_name, user_id AS business_user_id
+//          FROM company_events WHERE id = $1`,
+//         [event_id]
+//       );
+
+//       if (eventData.rows.length) {
+//         await sendNotificationToBusiness({
+//           businessUserId: eventData.rows[0].business_user_id,
+//           title: "New Booking Received!",
+//           message: `${userData.rows[0].full_name} just booked ${eventData.rows[0].event_name}.`,
+//           type: "Booking",
+//           target: "Company",
+//           id: String(event_id),
+//           booking_id: String(booking_id),
+//         });
+//       }
+//     }
+
+//     await client.query("COMMIT");
+
+//     return res.status(201).json({
+//       status: true,
+//       message:
+//         eventDataCheck.price_type === "Paid"
+//           ? "Booking initiated. Complete payment to confirm."
+//           : "Booking successfully created.",
+//       data: {
+//         clientSecret: paymentIntent ? paymentIntent.client_secret : null,
+//         bookingId: booking_id,
+//         stripeKey: resultStripeKey.rows[0],
+//       },
+//     });
+//   } catch (err) {
+//     await client.query("ROLLBACK");
+//     console.error("❌ Booking Error:", err.message);
+//     return res.status(500).json({ status: false, error: "Internal server error" });
+//   } finally {
+//     client.release();
+//   }
+// };
+
+
+
+// exports.cancelBooking = async (req, res) => {
+//   const { bookingId } = req.params;
+
+//   const client = await pool.connect();
+//   try {
+//     await client.query('BEGIN');
+
+//     const booking = await client.query(
+//       `SELECT event_id, number_of_tickets, status FROM event_bookings WHERE id = $1`,
+//       [bookingId]
+//     );
+
+//     if (!booking.rows.length) return res.status(404).json({ status: false, message: 'Booking not found' });
+
+//     if (booking.rows[0].status !== 'pending') {
+//       return res.status(400).json({ status: false, message: 'Booking already finalized' });
+//     }
+
+//     const { event_id, number_of_tickets } = booking.rows[0];
+
+//     // Restore seats
+//     // await client.query(
+//     //   `UPDATE company_events
+//     //    SET total_available_seats = total_available_seats + $1,
+//     //        updated_at = NOW()
+//     //    WHERE id = $2`,
+//     //   [number_of_tickets, event_id]
+//     // );
+
+//     // Update booking + transaction
+//     await client.query(`UPDATE event_bookings SET status = 'cancelled' WHERE id = $1`, [bookingId]);
+//     await client.query(`UPDATE transactions SET status = 'cancelled' WHERE booking_id = $1`, [bookingId]);
+
+//     await client.query('COMMIT');
+//     return res.status(400).json({ status: false, error: 'Booking cancelled and seats restored.' });
+//   } catch (err) {
+//     await client.query('ROLLBACK');
+//     console.error('Cancel booking error:', err.message);
+//     return res.status(500).json({ status: false, error: 'Internal server error' });
+//   } finally {
+//     client.release();
+//   }
+// };
+
 exports.createEventBooking = async (req, res) => {
   const user_id = req.user?.userId;
+
   const {
     company_id,
     event_id,
-    event_price = 0.0,
-    number_of_tickets,
-    total_amount = 0.0,
-    attendee_info,
-    platform_fee = 0.0,
-    stripe_key,
     event_booking_date,
+    platform_fee = 0,
+    stripe_key,
+    items = [],
+    attendee_info = [],
   } = req.body;
+
+  if (!items.length) {
+    return res.status(400).json({
+      status: false,
+      message: "At least one ticket item is required",
+    });
+  }
 
   if (!stripe_key || !["test", "production"].includes(stripe_key)) {
     return res.status(400).json({
@@ -1135,54 +1569,22 @@ exports.createEventBooking = async (req, res) => {
     });
   }
 
-  const StripeQuery = `
+  // 🔑 Fetch Stripe key
+  const stripeKeyRes = await pool.query(
+    `
     SELECT id, environment, publishable_key
     FROM stripe_keys
     WHERE environment = $1
-    LIMIT 1;
-  `;
+    LIMIT 1
+    `,
+    [stripe_key]
+  );
 
-  const resultStripeKey = await pool.query(StripeQuery, [stripe_key]);
-
-  if (resultStripeKey.rows.length === 0) {
+  if (!stripeKeyRes.rows.length) {
     return res.status(404).json({
       status: false,
       message: "No Stripe keys found for environment: " + stripe_key,
     });
-  }
-
-  const eventCheck = await pool.query(
-    `
-    SELECT id, price_type, total_available_seats
-    FROM company_events
-    WHERE id = $1 AND user_id = $2
-    `,
-    [event_id, company_id]
-  );
-
-  if (!eventCheck.rows.length) {
-    return res.status(400).json({
-      status: false,
-      error: "Invalid event_id or event does not belong to the specified company.",
-    });
-  }
-
-  const eventDataCheck = eventCheck.rows[0];
-
-  if (eventDataCheck.price_type === "Paid") {
-    if (!user_id || !event_id || !company_id || !number_of_tickets || !total_amount) {
-      return res.status(400).json({ status: false, error: "Missing required fields" });
-    }
-  } else {
-    if (!user_id || !event_id || !company_id || !number_of_tickets) {
-      return res.status(400).json({ status: false, error: "Missing required fields" });
-    }
-  }
-
-  if (attendee_info && attendee_info.length !== number_of_tickets) {
-    return res
-      .status(400)
-      .json({ status: false, error: "Attendee count mismatch with number_of_tickets" });
   }
 
   const client = await pool.connect();
@@ -1190,121 +1592,163 @@ exports.createEventBooking = async (req, res) => {
   try {
     await client.query("BEGIN");
 
-    // 🔒 STEP 1: Lock event row
-    const eventLockRes = await client.query(
+    // ============================
+    // 🔒 STEP 1: LOCK TICKET ROWS
+    // ============================
+    const ticketIds = items.map(i => i.ticket_id);
+
+    const lockedTicketsRes = await client.query(
       `
-      SELECT id, total_available_seats
-      FROM company_events
-      WHERE id = $1
+      SELECT id, total_seats
+      FROM company_event_tickets
+      WHERE id = ANY($1::int[])
       FOR UPDATE
       `,
-      [event_id]
+      [ticketIds]
     );
 
-    if (!eventLockRes.rows.length) {
-      throw new Error("Event not found");
+    if (lockedTicketsRes.rows.length !== ticketIds.length) {
+      throw new Error("Invalid ticket selected");
     }
 
-    const { total_available_seats } = eventLockRes.rows[0];
-
-    // 🔢 STEP 2: Calculate booked seats for the given date
+    // ============================
+    // 📊 STEP 2: FETCH BOOKED SEATS (NO LOCK)
+    // ============================
     const bookedSeatsRes = await client.query(
       `
-      SELECT COALESCE(SUM(number_of_tickets), 0) AS booked_seats
-      FROM event_bookings
-      WHERE event_id = $1
-        AND event_booking_date = $2
-        AND status IN ('confirmed', 'pending')
+      SELECT
+        bi.ticket_id,
+        COALESCE(SUM(bi.quantity), 0) AS booked_seats
+      FROM event_booking_items bi
+      JOIN event_bookings b
+        ON b.id = bi.booking_id
+      WHERE bi.ticket_id = ANY($1::int[])
+        AND b.event_booking_date = $2
+        AND b.status IN ('pending', 'confirmed')
+      GROUP BY bi.ticket_id
       `,
-      [event_id, event_booking_date]
+      [ticketIds, event_booking_date]
     );
 
-    const bookedSeats = parseInt(bookedSeatsRes.rows[0].booked_seats, 10);
-    const availableSeats = total_available_seats - bookedSeats;
+    const bookedMap = {};
+    bookedSeatsRes.rows.forEach(row => {
+      bookedMap[row.ticket_id] = Number(row.booked_seats);
+    });
 
-    if (availableSeats < number_of_tickets) {
-      return res.status(400).json({
-        status: false,
-        message: `Only ${availableSeats} seats are available on ${event_booking_date}`,
-      });
+    // ============================
+    // ✅ STEP 3: VALIDATE EACH TICKET
+    // ============================
+    for (const item of items) {
+      const ticketRow = lockedTicketsRes.rows.find(
+        t => t.id === item.ticket_id
+      );
+
+      const totalSeats = Number(ticketRow.total_seats);
+      const bookedSeats = bookedMap[item.ticket_id] || 0;
+      const availableSeats = totalSeats - bookedSeats;
+
+      if (item.quantity > availableSeats) {
+        throw new Error(
+          `Only ${availableSeats} seats available for ${item.ticket_type}`
+        );
+      }
     }
 
-    const Feesquery = `
-      SELECT id, service_type, company_fee, driver_fee, member_fee,
-             platform_fee, fee_type, updated_at
-      FROM platform_fees
-      WHERE service_type = 'Event Booking'
-      ORDER BY updated_at DESC
-      LIMIT 1
-    `;
-    await pool.query(Feesquery);
+    // ============================
+    // 💰 STEP 4: CALCULATE TOTAL
+    // ============================
+    const total_amount = items.reduce(
+      (sum, i) => sum + i.quantity * i.price_per_ticket,
+      0
+    );
 
-    const status = eventDataCheck.price_type === "Free" ? "confirmed" : "pending";
-
-    // 1️⃣ Insert booking
-    const bookingInsertQuery = `
-      INSERT INTO event_bookings (
-        user_id, company_id, event_id, event_price, number_of_tickets,
-        total_amount, attendee_info, status, platform_fee, event_booking_date
+    // ============================
+    // 🧾 STEP 5: INSERT BOOKING
+    // ============================
+    const bookingRes = await client.query(
+      `
+      INSERT INTO event_bookings
+      (
+        user_id,
+        company_id,
+        event_id,
+        total_amount,
+        platform_fee,
+        status,
+        event_booking_date,
+        attendee_info
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
       RETURNING id
-    `;
+      `,
+      [
+        user_id,
+        company_id,
+        event_id,
+        total_amount,
+        platform_fee,
+        "pending",
+        event_booking_date,
+        JSON.stringify(attendee_info || []),
+      ]
+    );
 
-    const bookingResult = await client.query(bookingInsertQuery, [
-      user_id,
-      company_id,
-      event_id,
-      event_price || null,
-      number_of_tickets,
-      total_amount,
-      JSON.stringify(attendee_info || []),
-      status,
-      platform_fee,
-      event_booking_date,
-    ]);
+    const booking_id = bookingRes.rows[0].id;
 
-    const booking_id = bookingResult.rows[0].id;
-
-    // 3️⃣ Stripe payment (Paid only)
-    let paymentIntent = null;
-    if (eventDataCheck.price_type === "Paid") {
-      paymentIntent = await stripe.paymentIntents.create({
-        amount: Math.round(total_amount * 100),
-        currency: "aud",
-        metadata: { booking_id, user_id, event_id },
-      });
-
+    // ============================
+    // 🎟 STEP 6: INSERT BOOKING ITEMS
+    // ============================
+    for (const item of items) {
       await client.query(
         `
-        INSERT INTO transactions
-        (booking_id, user_id, event_id, payment_intent_id, amount, currency, status)
-        VALUES ($1,$2,$3,$4,$5,$6,$7)
+        INSERT INTO event_booking_items
+        (
+          booking_id,
+          event_id,
+          ticket_id,
+          ticket_type,
+          is_companion,
+          quantity,
+          price_per_ticket,
+          total_price
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
         `,
-        [booking_id, user_id, event_id, paymentIntent.id, total_amount, "aud", "pending"]
+        [
+          booking_id,
+          event_id,
+          item.ticket_id,
+          item.ticket_type,
+          item.is_companion || false,
+          item.quantity,
+          item.price_per_ticket,
+          item.quantity * item.price_per_ticket,
+        ]
       );
     }
 
-    // 4️⃣ Notification for free events
-    if (eventDataCheck.price_type === "Free") {
-      const userData = await pool.query("SELECT * FROM users WHERE id = $1", [user_id]);
-      const eventData = await pool.query(
-        `SELECT id, event_name, user_id AS business_user_id
-         FROM company_events WHERE id = $1`,
-        [event_id]
-      );
+    // ============================
+    // 💳 STEP 7: STRIPE PAYMENT
+    // ============================
+    let clientSecret = null;
 
-      if (eventData.rows.length) {
-        await sendNotificationToBusiness({
-          businessUserId: eventData.rows[0].business_user_id,
-          title: "New Booking Received!",
-          message: `${userData.rows[0].full_name} just booked ${eventData.rows[0].event_name}.`,
-          type: "Booking",
-          target: "Company",
-          id: String(event_id),
-          booking_id: String(booking_id),
-        });
-      }
+    if (total_amount > 0) {
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: Math.round(total_amount * 100),
+        currency: "aud",
+        metadata: {
+          booking_id,
+          user_id,
+          event_id,
+        },
+      });
+
+      clientSecret = paymentIntent.client_secret;
+    } else {
+      await client.query(
+        `UPDATE event_bookings SET status = 'confirmed' WHERE id = $1`,
+        [booking_id]
+      );
     }
 
     await client.query("COMMIT");
@@ -1312,67 +1756,51 @@ exports.createEventBooking = async (req, res) => {
     return res.status(201).json({
       status: true,
       message:
-        eventDataCheck.price_type === "Paid"
-          ? "Booking initiated. Complete payment to confirm."
-          : "Booking successfully created.",
+        total_amount > 0
+          ? "Booking initiated. Complete payment."
+          : "Booking confirmed.",
       data: {
-        clientSecret: paymentIntent ? paymentIntent.client_secret : null,
-        bookingId: booking_id,
-        stripeKey: resultStripeKey.rows[0],
+        booking_id,
+        clientSecret,
+        stripeKey: stripeKeyRes.rows[0],
+        total_amount,
       },
     });
   } catch (err) {
     await client.query("ROLLBACK");
-    console.error("❌ Booking Error:", err.message);
-    return res.status(500).json({ status: false, error: "Internal server error" });
+    console.error("❌ Booking error:", err.message);
+    return res.status(400).json({
+      status: false,
+      error: err.message,
+    });
   } finally {
     client.release();
   }
 };
-
 
 
 exports.cancelBooking = async (req, res) => {
   const { bookingId } = req.params;
 
-  const client = await pool.connect();
   try {
-    await client.query('BEGIN');
-
-    const booking = await client.query(
-      `SELECT event_id, number_of_tickets, status FROM event_bookings WHERE id = $1`,
+    const result = await pool.query(
+      `UPDATE event_bookings SET status = 'cancelled' WHERE id = $1 AND status = 'pending'`,
       [bookingId]
     );
 
-    if (!booking.rows.length) return res.status(404).json({ status: false, message: 'Booking not found' });
-
-    if (booking.rows[0].status !== 'pending') {
-      return res.status(400).json({ status: false, message: 'Booking already finalized' });
+    if (!result.rowCount) {
+      return res.status(400).json({
+        status: false,
+        message: "Booking already finalized or not found",
+      });
     }
 
-    const { event_id, number_of_tickets } = booking.rows[0];
-
-    // Restore seats
-    // await client.query(
-    //   `UPDATE company_events
-    //    SET total_available_seats = total_available_seats + $1,
-    //        updated_at = NOW()
-    //    WHERE id = $2`,
-    //   [number_of_tickets, event_id]
-    // );
-
-    // Update booking + transaction
-    await client.query(`UPDATE event_bookings SET status = 'cancelled' WHERE id = $1`, [bookingId]);
-    await client.query(`UPDATE transactions SET status = 'cancelled' WHERE booking_id = $1`, [bookingId]);
-
-    await client.query('COMMIT');
-    return res.status(400).json({ status: false, error: 'Booking cancelled and seats restored.' });
+    res.json({
+      status: true,
+      message: "Booking cancelled successfully",
+    });
   } catch (err) {
-    await client.query('ROLLBACK');
-    console.error('Cancel booking error:', err.message);
-    return res.status(500).json({ status: false, error: 'Internal server error' });
-  } finally {
-    client.release();
+    console.error("Cancel booking error:", err.message);
+    res.status(500).json({ status: false, error: "Server error" });
   }
 };
-
