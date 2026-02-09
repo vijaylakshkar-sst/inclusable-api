@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS company_events (
   how_to_reach_destination TEXT,
   latitude DOUBLE PRECISION DEFAULT NULL,
   longitude DOUBLE PRECISION DEFAULT NULL,
+  accessibility_features TEXT[],
 
   is_deleted BOOLEAN DEFAULT FALSE,
   

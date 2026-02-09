@@ -86,6 +86,7 @@ exports.createCompanyEvent = async (req, res) => {
       event_types,
       disability_types,
       accessibility_types,
+      accessibility_features,
       event_description,
       start_date,
       end_date,
@@ -152,14 +153,15 @@ exports.createCompanyEvent = async (req, res) => {
         event_address,
         how_to_reach_destination,
         latitude,
-        longitude
+        longitude,
+        accessibility_features,
       )
       VALUES (
         $1,$2,$3,$4,$5,
         $6,$7,$8,$9,
         $10,$11,$12,$13,
         $14,$15,$16,
-        $17,$18,$19,$20
+        $17,$18,$19,$20,$21
       )
       RETURNING id
     `;
@@ -194,7 +196,8 @@ exports.createCompanyEvent = async (req, res) => {
       event_address,
       how_to_reach_destination,
       latitude,
-      longitude
+      longitude,
+      parseArray(accessibility_features)
     ];
 
     const { rows: eventData } = await pool.query(query, values);
@@ -349,6 +352,7 @@ exports.updateCompanyEvent = async (req, res) => {
       'how_to_reach_destination',
       'latitude',
       'longitude',
+      'accessibility_features',
     ];
 
     const updates = [];
@@ -370,7 +374,7 @@ exports.updateCompanyEvent = async (req, res) => {
       const value = req.body[field];
 
       if (
-        ['event_types', 'disability_types', 'accessibility_types'].includes(
+        ['event_types', 'disability_types', 'accessibility_types','accessibility_features'].includes(
           field
         )
       ) {
