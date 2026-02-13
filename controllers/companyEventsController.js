@@ -1782,6 +1782,15 @@ exports.createEventBooking = async (req, res) => {
         },
       });
 
+      await client.query( 
+        `
+        INSERT INTO transactions
+        (booking_id, user_id, event_id, payment_intent_id, amount, currency, status)
+        VALUES ($1,$2,$3,$4,$5,$6,$7)
+        `,
+        [booking_id, user_id, event_id, paymentIntent.id, total_amount, "aud", "pending"]
+      );
+
       clientSecret = paymentIntent.client_secret;
     } else {
       await client.query(

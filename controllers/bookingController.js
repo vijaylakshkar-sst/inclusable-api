@@ -184,6 +184,7 @@ exports.getUserBookingById = async (req, res) => {
         booking_id: booking.id,
         status: booking.status,
         booking_code: booking.booking_code,
+        event_booking_date: booking.event_booking_date,
         total_amount: Number(booking.total_amount),
         platform_fee: Number(booking.platform_fee || 0),
         qrCode:qrImage,

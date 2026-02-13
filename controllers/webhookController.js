@@ -247,6 +247,7 @@ exports.handleStripeWebhook = async (req, res) => {
         `,
         [paymentIntentId, bookingCode]
       );
+console.log(bookingRes.rows[0]);
 
       if (!bookingRes.rows.length) {
         throw new Error('Booking not found for payment');
