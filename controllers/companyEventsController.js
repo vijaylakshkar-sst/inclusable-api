@@ -154,7 +154,7 @@ exports.createCompanyEvent = async (req, res) => {
         how_to_reach_destination,
         latitude,
         longitude,
-        accessibility_features,
+        accessibility_features
       )
       VALUES (
         $1,$2,$3,$4,$5,
