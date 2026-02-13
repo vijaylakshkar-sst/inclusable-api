@@ -195,6 +195,9 @@ const BASE_IMAGE_URL = process.env.BASE_IMAGE_URL;
 //   res.json({ received: true });
 // };
 
+const generateBookingCode = () => {
+  return "INEPS" + Date.now() + Math.floor(Math.random() * 100000);
+};
 
 exports.handleStripeWebhook = async (req, res) => {
   const sig = req.headers['stripe-signature'];
@@ -229,17 +232,20 @@ exports.handleStripeWebhook = async (req, res) => {
         [paymentIntentId]
       );
 
+      const bookingCode = generateBookingCode();
+
       // 2️⃣ Confirm booking
       const bookingRes = await client.query(
         `
         UPDATE event_bookings
-        SET status = 'confirmed'
+        SET status = 'confirmed',
+            booking_code = $2
         WHERE id = (
           SELECT booking_id FROM transactions WHERE payment_intent_id = $1
         )
-        RETURNING id, user_id, event_id
+        RETURNING id, user_id, event_id, booking_code
         `,
-        [paymentIntentId]
+        [paymentIntentId, bookingCode]
       );
 
       if (!bookingRes.rows.length) {

@@ -1599,7 +1599,7 @@ exports.createEventBooking = async (req, res) => {
     // ============================
     // 🔒 STEP 1: LOCK TICKET ROWS
     // ============================
-    const ticketIds = items.map(i => i.ticket_id);
+    const ticketIds = [...new Set(items.map(i => i.ticket_id))];
 
     const lockedTicketsRes = await client.query(
       `
@@ -1729,6 +1729,41 @@ exports.createEventBooking = async (req, res) => {
           item.quantity * item.price_per_ticket,
         ]
       );
+    }
+
+    // ============================
+    // 👥 STEP 6: INSERT ATTENDEES
+    // ============================
+
+    let ticketCounter = 1;
+
+    for (const attendee of attendee_info) {
+
+      const attendeeName =
+        attendee.full_name && attendee.full_name.trim() !== ""
+          ? attendee.full_name
+          : `Ticket ${ticketCounter}`;
+
+      await client.query(
+        `
+        INSERT INTO event_booking_attendees
+        (
+          booking_id,
+          attendee_name,
+          attendee_email,
+          checkin_status
+        )
+        VALUES ($1,$2,$3,$4)
+        `,
+        [
+          booking_id,
+          attendeeName,
+          attendee.email || null,
+          "pending"
+        ]
+      );
+
+      ticketCounter++;
     }
 
     // ============================

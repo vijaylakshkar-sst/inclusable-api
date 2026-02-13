@@ -167,6 +167,14 @@ exports.getUserBookingById = async (req, res) => {
       ? `${BASE_EVENT_IMAGE_URL}/${booking.event_thumbnail}`
       : null;
 
+      const QRCode = require('qrcode');
+
+    const qrData = {
+      booking_code: booking.booking_code
+    };
+
+    const qrImage = await QRCode.toDataURL(JSON.stringify(qrData));
+      
     // ============================
     // 5️⃣ Final response
     // ============================
@@ -175,9 +183,10 @@ exports.getUserBookingById = async (req, res) => {
       data: {
         booking_id: booking.id,
         status: booking.status,
+        booking_code: booking.booking_code,
         total_amount: Number(booking.total_amount),
         platform_fee: Number(booking.platform_fee || 0),
-
+        qrCode:qrImage,
         event: {
           event_name: booking.event_name,
           event_thumbnail: booking.event_thumbnail,
@@ -286,5 +295,172 @@ exports.getEventSeatAvailability = async (req, res) => {
       status: false,
       message: "Server error",
     });
+  }
+};
+
+
+exports.scanQrCode = async (req, res) => {
+  const { booking_code } = req.body;
+
+  try {
+
+    // 🔎 Get booking + event + company
+    const bookingRes = await pool.query(
+      `
+      SELECT 
+        b.*,
+        e.event_name,
+        e.start_date,
+        e.end_date,
+        e.start_time,
+        e.end_time,
+        e.event_address,
+        e.event_thumbnail,
+        e.latitude,
+        e.longitude,
+        u.id AS company_id,
+        u.full_name AS company_name,
+        u.email AS company_email
+      FROM event_bookings b
+      JOIN company_events e ON e.id = b.event_id
+      JOIN users u ON u.id = e.user_id
+      WHERE b.booking_code = $1
+      AND b.status = 'confirmed'
+      AND e.is_deleted = FALSE
+      `,
+      [booking_code]
+    );
+
+    if (!bookingRes.rows.length) {
+      return res.status(400).json({
+        status: false,
+        message: "Invalid or Expired Ticket"
+      });
+    }
+
+    const booking = bookingRes.rows[0];
+
+    // 👥 Fetch attendees
+    const attendeesRes = await pool.query(
+      `
+      SELECT id, attendee_name, attendee_email, checkin_status, checkin_time
+      FROM event_booking_attendees
+      WHERE booking_id = $1
+      ORDER BY id ASC
+      `,
+      [booking.id]
+    );
+
+    return res.json({
+      status: true,
+      booking,
+      event: {
+        event_name: booking.event_name,
+        start_date: booking.start_date,
+        end_date: booking.end_date,
+        start_time: booking.start_time,
+        end_time: booking.end_time,
+        event_address: booking.event_address,
+        event_thumbnail: booking.event_thumbnail,
+        latitude: booking.latitude,
+        longitude: booking.longitude,
+      },
+      company: {
+        company_id: booking.company_id,
+        company_name: booking.company_name,
+        company_email: booking.company_email
+      },
+      attendees: attendeesRes.rows
+    });
+
+  } catch (err) {
+    console.error("❌ Scan QR Error:", err.message);
+    return res.status(500).json({
+      status: false,
+      message: "Server error"
+    });
+  }
+};
+
+exports.checkInAttendees = async (req, res) => {
+  const { booking_id, attendee_ids } = req.body;
+  const businessUserId = req.user.userId; // logged-in company
+
+  if (!booking_id || !attendee_ids?.length) {
+    return res.status(400).json({
+      status: false,
+      message: "booking_id and attendee_ids are required"
+    });
+  }
+
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    // 🔐 1️⃣ Verify booking + event ownership
+    const bookingRes = await client.query(
+      `
+      SELECT b.id
+      FROM event_bookings b
+      JOIN company_events e ON e.id = b.event_id
+      WHERE b.id = $1
+      AND b.status = 'confirmed'
+      AND e.user_id = $2
+      `,
+      [booking_id, businessUserId]
+    );
+
+    if (!bookingRes.rows.length) {
+      throw new Error("Invalid booking or unauthorized access");
+    }
+
+    // 🔎 2️⃣ Validate attendees belong to booking
+    const validAttendees = await client.query(
+      `
+      SELECT id
+      FROM event_booking_attendees
+      WHERE booking_id = $1
+      AND id = ANY($2::int[])
+      `,
+      [booking_id, attendee_ids]
+    );
+
+    if (validAttendees.rows.length !== attendee_ids.length) {
+      throw new Error("Some attendees are invalid");
+    }
+
+    // ✅ 3️⃣ Update only pending attendees
+    const updateRes = await client.query(
+      `
+      UPDATE event_booking_attendees
+      SET checkin_status = 'checked_in',
+          checkin_time = NOW()
+      WHERE booking_id = $1
+      AND id = ANY($2::int[])
+      AND checkin_status = 'pending'
+      RETURNING id
+      `,
+      [booking_id, attendee_ids]
+    );
+
+    await client.query("COMMIT");
+
+    return res.json({
+      status: true,
+      message: "Ticket Verified",
+      checked_in_count: updateRes.rowCount
+    });
+
+  } catch (err) {
+    await client.query("ROLLBACK");
+    console.error("❌ Check-in Error:", err.message);
+
+    return res.status(400).json({
+      status: false,
+      message: err.message
+    });
+  } finally {
+    client.release();
   }
 };
