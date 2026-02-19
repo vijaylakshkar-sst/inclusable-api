@@ -122,31 +122,76 @@ exports.getUserBookingById = async (req, res) => {
     const booking = bookingResult.rows[0];
 
     // ============================
-    // 2️⃣ Fetch ticket summary
+    // 2️⃣ Fetch ticket summary (raw)
     // ============================
     const ticketSummaryRes = await pool.query(
       `
       SELECT
-        ticket_type,
-        is_companion,
-        SUM(quantity) AS total_quantity,
-        price_per_ticket,
-        SUM(total_price) AS total_price
-      FROM event_booking_items
-      WHERE booking_id = $1
-      GROUP BY ticket_type, is_companion, price_per_ticket
-      ORDER BY is_companion ASC
+        bi.ticket_id,
+        ct.ticket_type,
+        ct.companion_ticket_type,
+        bi.is_companion,
+        SUM(bi.quantity) AS total_quantity,
+        bi.price_per_ticket,
+        SUM(bi.total_price) AS total_price
+      FROM event_booking_items bi
+      JOIN company_event_tickets ct
+        ON ct.id = bi.ticket_id
+      WHERE bi.booking_id = $1
+      GROUP BY 
+        bi.ticket_id,
+        ct.ticket_type,
+        ct.companion_ticket_type,
+        bi.is_companion,
+        bi.price_per_ticket
+      ORDER BY bi.ticket_id
       `,
       [id]
     );
 
-    const ticket_summary = ticketSummaryRes.rows.map((row) => ({
-      ticket_type: row.ticket_type,
-      is_companion: row.is_companion,
-      quantity: Number(row.total_quantity),
-      price_per_ticket: Number(row.price_per_ticket),
-      total_price: Number(row.total_price),
-    }));
+    // ============================
+    // 2️⃣ Transform → ticket-type wise grouping
+    // ============================
+
+   const groupedTickets = {};
+
+    for (const row of ticketSummaryRes.rows) {
+      const ticketId = row.ticket_id;
+
+      if (!groupedTickets[ticketId]) {
+        groupedTickets[ticketId] = {
+          ticket_type: row.ticket_type,
+          quantity: 0,
+          price_per_ticket: null,
+          total_price: 0
+        };
+      }
+
+      if (row.is_companion === true) {
+        groupedTickets[ticketId].companion_ticket_type =
+          row.companion_ticket_type;
+
+        groupedTickets[ticketId].companion_quantity =
+          Number(row.total_quantity);
+
+        groupedTickets[ticketId].companion_price_per_ticket =
+          Number(row.price_per_ticket);
+
+        groupedTickets[ticketId].companion_total_price =
+          Number(row.total_price);
+      } else {
+        groupedTickets[ticketId].quantity =
+          Number(row.total_quantity);
+
+        groupedTickets[ticketId].price_per_ticket =
+          Number(row.price_per_ticket);
+
+        groupedTickets[ticketId].total_price =
+          Number(row.total_price);
+      }
+    }
+
+    const ticket_summary = Object.values(groupedTickets);
 
     // ============================
     // 3️⃣ Parse attendee info
@@ -167,14 +212,14 @@ exports.getUserBookingById = async (req, res) => {
       ? `${BASE_EVENT_IMAGE_URL}/${booking.event_thumbnail}`
       : null;
 
-      const QRCode = require('qrcode');
+    const QRCode = require('qrcode');
 
     const qrData = {
       booking_code: booking.booking_code
     };
 
     const qrImage = await QRCode.toDataURL(JSON.stringify(qrData));
-      
+
     // ============================
     // 5️⃣ Final response
     // ============================
@@ -187,7 +232,7 @@ exports.getUserBookingById = async (req, res) => {
         event_booking_date: booking.event_booking_date,
         total_amount: Number(booking.total_amount),
         platform_fee: Number(booking.platform_fee || 0),
-        qrCode:qrImage,
+        qrCode: qrImage,
         event: {
           event_name: booking.event_name,
           event_thumbnail: booking.event_thumbnail,
@@ -238,34 +283,48 @@ exports.getEventSeatAvailability = async (req, res) => {
   try {
     const result = await pool.query(
       `
-      WITH total_seats AS (
+      WITH ticket_config AS (
         SELECT
-          company_event_id AS event_id,
-          COALESCE(SUM(total_seats), 0) AS total_seats
+          id,
+          ticket_type,
+          price_type,
+          ticket_price,
+          total_seats,
+          ticket_note,
+          allow_companion,
+          companion_ticket_type,
+          companion_price_type,
+          companion_ticket_price,
+          companion_total_seats,
+          companion_ticket_note
         FROM company_event_tickets
         WHERE company_event_id = $1
-        GROUP BY company_event_id
       ),
-      booked_seats AS (
+
+      booked_tickets AS (
         SELECT
-          b.event_id,
-          COALESCE(SUM(bi.quantity), 0) AS booked_seats
+          bi.ticket_id,
+          bi.is_companion,
+          SUM(bi.quantity) AS booked_quantity
         FROM event_bookings b
-        JOIN event_booking_items bi
-          ON bi.booking_id = b.id
+        JOIN event_booking_items bi ON bi.booking_id = b.id
         WHERE b.event_id = $1
           AND b.event_booking_date = $2
           AND b.status = 'confirmed'
-        GROUP BY b.event_id
+        GROUP BY bi.ticket_id, bi.is_companion
       )
+
       SELECT
-        ts.event_id,
-        ts.total_seats,
-        COALESCE(bs.booked_seats, 0) AS booked_seats,
-        (ts.total_seats - COALESCE(bs.booked_seats, 0)) AS available_seats
-      FROM total_seats ts
-      LEFT JOIN booked_seats bs
-        ON bs.event_id = ts.event_id
+        tc.*,
+        COALESCE(bt_main.booked_quantity, 0) AS booked_main,
+        COALESCE(bt_comp.booked_quantity, 0) AS booked_companion
+      FROM ticket_config tc
+      LEFT JOIN booked_tickets bt_main
+        ON bt_main.ticket_id = tc.id
+        AND bt_main.is_companion = FALSE
+      LEFT JOIN booked_tickets bt_comp
+        ON bt_comp.ticket_id = tc.id
+        AND bt_comp.is_companion = TRUE
       `,
       [eventId, date]
     );
@@ -273,26 +332,66 @@ exports.getEventSeatAvailability = async (req, res) => {
     if (!result.rows.length) {
       return res.status(404).json({
         status: false,
-        message: "Event not found or no tickets configured",
+        message: "No tickets configured for this event",
       });
     }
 
-    res.json({
+    let totalSeats = 0;
+    let totalBooked = 0;
+
+    const tickets = result.rows.map(row => {
+      const mainTotal = Number(row.total_seats || 0);
+      const mainBooked = Number(row.booked_main || 0);
+      const mainAvailable = Math.max(0, mainTotal - mainBooked);
+
+      totalSeats += mainTotal;
+      totalBooked += mainBooked;
+
+      let companionBooked = 0;
+      let companionAvailable = 0;
+
+      if (row.allow_companion) {
+        const compTotal = Number(row.companion_total_seats || 0);
+        companionBooked = Number(row.booked_companion || 0);
+        companionAvailable = Math.max(0, compTotal - companionBooked);
+
+        totalSeats += compTotal;
+        totalBooked += companionBooked;
+      }
+
+      return {
+        id: row.id,
+        ticket_type: row.ticket_type,
+        price_type: row.price_type,
+        ticket_price: row.ticket_price,
+        total_seats: mainAvailable,
+        ticket_note: row.ticket_note,
+        allow_companion: row.allow_companion,
+
+        companion_ticket_type: row.companion_ticket_type,
+        companion_price_type: row.companion_price_type,
+        companion_ticket_price: row.companion_ticket_price,
+        companion_total_seats: companionAvailable,
+        companion_ticket_note: row.companion_ticket_note,
+
+      };
+    });
+
+    return res.json({
       status: true,
       data: {
-        event_id: result.rows[0].event_id,
+        event_id: Number(eventId),
         date,
-        total_seats: Number(result.rows[0].total_seats),
-        booked_seats: Number(result.rows[0].booked_seats),
-        available_seats: Math.max(
-          0,
-          Number(result.rows[0].available_seats)
-        ),
-      },
+        total_seats: totalSeats,
+        booked_seats: totalBooked,
+        available_seats: Math.max(0, totalSeats - totalBooked),
+        tickets
+      }
     });
+
   } catch (err) {
     console.error("❌ Availability error:", err.message);
-    res.status(500).json({
+    return res.status(500).json({
       status: false,
       message: "Server error",
     });
@@ -354,24 +453,26 @@ exports.scanQrCode = async (req, res) => {
 
     return res.json({
       status: true,
-      booking,
-      event: {
-        event_name: booking.event_name,
-        start_date: booking.start_date,
-        end_date: booking.end_date,
-        start_time: booking.start_time,
-        end_time: booking.end_time,
-        event_address: booking.event_address,
-        event_thumbnail: booking.event_thumbnail,
-        latitude: booking.latitude,
-        longitude: booking.longitude,
-      },
-      company: {
-        company_id: booking.company_id,
-        company_name: booking.company_name,
-        company_email: booking.company_email
-      },
-      attendees: attendeesRes.rows
+      data: {
+        booking,
+        event: {
+          event_name: booking.event_name,
+          start_date: booking.start_date,
+          end_date: booking.end_date,
+          start_time: booking.start_time,
+          end_time: booking.end_time,
+          event_address: booking.event_address,
+          event_thumbnail: booking.event_thumbnail,
+          latitude: booking.latitude,
+          longitude: booking.longitude,
+        },
+        company: {
+          company_id: booking.company_id,
+          company_name: booking.company_name,
+          company_email: booking.company_email
+        },
+        attendees: attendeesRes.rows
+      }
     });
 
   } catch (err) {
@@ -450,7 +551,9 @@ exports.checkInAttendees = async (req, res) => {
     return res.json({
       status: true,
       message: "Ticket Verified",
-      checked_in_count: updateRes.rowCount
+      data: {
+        checked_in_count: updateRes.rowCount
+      }
     });
 
   } catch (err) {

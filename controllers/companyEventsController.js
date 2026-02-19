@@ -1034,6 +1034,9 @@ exports.getBookingById = async (req, res) => {
   const { id } = req.params;
 
   try {
+    // ============================
+    // 1️⃣ Fetch booking + joins
+    // ============================
     const query = `
       SELECT 
         eb.id AS booking_id,
@@ -1082,26 +1085,155 @@ exports.getBookingById = async (req, res) => {
 
     const booking = result.rows[0];
 
-    // Format event thumbnail URL
+    // ============================
+    // 2️⃣ Ticket Summary
+    // ============================
+    const ticketSummaryRes = await pool.query(
+      `
+      SELECT
+        bi.ticket_id,
+        ct.ticket_type,
+        ct.companion_ticket_type,
+        bi.is_companion,
+        SUM(bi.quantity) AS total_quantity,
+        bi.price_per_ticket,
+        SUM(bi.total_price) AS total_price
+      FROM event_booking_items bi
+      JOIN company_event_tickets ct
+        ON ct.id = bi.ticket_id
+      WHERE bi.booking_id = $1
+      GROUP BY 
+        bi.ticket_id,
+        ct.ticket_type,
+        ct.companion_ticket_type,
+        bi.is_companion,
+        bi.price_per_ticket
+      ORDER BY bi.ticket_id
+      `,
+      [id]
+    );
+
+    const groupedTickets = {};
+
+    for (const row of ticketSummaryRes.rows) {
+      const ticketId = row.ticket_id;
+
+      if (!groupedTickets[ticketId]) {
+        groupedTickets[ticketId] = {
+          ticket_type: row.ticket_type,
+          quantity: 0,
+          price_per_ticket: null,
+          total_price: 0
+        };
+      }
+
+      if (row.is_companion === true) {
+        groupedTickets[ticketId].companion_ticket_type =
+          row.companion_ticket_type;
+
+        groupedTickets[ticketId].companion_quantity =
+          Number(row.total_quantity);
+
+        groupedTickets[ticketId].companion_price_per_ticket =
+          Number(row.price_per_ticket);
+
+        groupedTickets[ticketId].companion_total_price =
+          Number(row.total_price);
+      } else {
+        groupedTickets[ticketId].quantity =
+          Number(row.total_quantity);
+
+        groupedTickets[ticketId].price_per_ticket =
+          Number(row.price_per_ticket);
+
+        groupedTickets[ticketId].total_price =
+          Number(row.total_price);
+      }
+    }
+
+    const ticket_summary = Object.values(groupedTickets);
+
+    // ============================
+    // 3️⃣ Parse attendee_info
+    // ============================
+    try {
+      booking.attendee_info =
+        typeof booking.attendee_info === "string"
+          ? JSON.parse(booking.attendee_info)
+          : booking.attendee_info || [];
+    } catch {
+      booking.attendee_info = [];
+    }
+
+    // ============================
+    // 4️⃣ Format image URLs
+    // ============================
     booking.event_thumbnail = booking.event_thumbnail
       ? `${BASE_EVENT_IMAGE_URL}/${booking.event_thumbnail}`
       : null;
 
-    // Format user image URL
     booking.user_image = booking.user_image
       ? `${BASE_IMAGE_URL}/${booking.user_image}`
       : null;
 
-    console.log(booking, 'data');
-
+    // ============================
+    // 5️⃣ Final Response
+    // ============================
     res.json({
       status: true,
-      data: booking
+      data: {
+        booking_id: booking.booking_id,
+        status: booking.status,
+        event_booking_date: booking.event_booking_date,
+        created_at: booking.created_at,
+
+        user: {
+          user_id: booking.user_id,
+          user_name: booking.user_name,
+          user_email: booking.user_email,
+          user_phone: booking.user_phone,
+          user_image: booking.user_image,
+        },
+
+        company: {
+          company_id: booking.company_id,
+          business_name: booking.business_name,
+          business_email: booking.business_email,
+          business_phone_number: booking.business_phone_number,
+        },
+
+        event: {
+          event_id: booking.event_id,
+          event_name: booking.event_name,
+          price_type: booking.price_type,
+          event_thumbnail: booking.event_thumbnail,
+          start_date: booking.start_date,
+          end_date: booking.end_date,
+          start_time: booking.start_time,
+          end_time: booking.end_time,
+          event_address: booking.event_address,
+        },
+
+        booking_summary: booking.attendee_info,   // ✅ added
+
+        ticket_summary,                           // ✅ added
+
+        event_price: Number(booking.event_price || 0),
+        additional_charges: Number(booking.platform_fee || 0), // ✅ added
+        total_amount: Number(booking.total_amount || 0),
+
+        total_payable_amount:
+          Number(booking.total_amount || 0) +
+          Number(booking.platform_fee || 0),       // ✅ added
+      },
     });
 
   } catch (err) {
     console.error('Booking Detail Error:', err.message);
-    res.status(500).json({ status: false, error: 'Failed to fetch booking details' });
+    res.status(500).json({
+      status: false,
+      error: 'Failed to fetch booking details'
+    });
   }
 };
 

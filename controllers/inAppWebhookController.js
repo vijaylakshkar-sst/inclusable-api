@@ -18,7 +18,7 @@ exports.handleInAppWebhook = async (req, res) => {
     provider,
     transaction_id,
     amount,
-    currency = 'USD',
+    currency = 'AUD',
     event_type,
     renewal_info,
     originalTransactionId

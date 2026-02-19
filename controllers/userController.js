@@ -127,13 +127,9 @@ exports.upload = multer({
 });
 
 exports.register = async (req, res) => {
-  const {
-    full_name,
-    email,
-    password,
-    phone_number,
-    role, // either "NDIS Member" or "Company"
-  } = req.body;
+  let { full_name, email, password, phone_number, role } = req.body;
+
+  email = email?.trim().toLowerCase();
 
   // Basic validation
   if (!full_name || !email || !password || !phone_number || !role) {
@@ -499,7 +495,10 @@ exports.addAdditionalDetails = async (req, res) => {
 
 exports.login = async (req, res) => {
 
-  const { email, password, fcm_token } = req.body;
+  let { email, password, fcm_token } = req.body;
+
+  email = email?.trim().toLowerCase();
+
   const client = await pool.connect();
 
   // New comprehensive validation
