@@ -196,7 +196,7 @@ const BASE_IMAGE_URL = process.env.BASE_IMAGE_URL;
 // };
 
 const generateBookingCode = () => {
-  return "INEPS" + Date.now() + Math.floor(Math.random() * 100000);
+  return "INEPS" + Date.now() + Math.floor(Math.random() * 1000);
 };
 
 exports.handleStripeWebhook = async (req, res) => {

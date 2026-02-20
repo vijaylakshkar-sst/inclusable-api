@@ -1223,8 +1223,7 @@ exports.getBookingById = async (req, res) => {
         total_amount: Number(booking.total_amount || 0),
 
         total_payable_amount:
-          Number(booking.total_amount || 0) +
-          Number(booking.platform_fee || 0),       // ✅ added
+          Number(booking.total_amount || 0),       // ✅ added
       },
     });
 
@@ -1686,6 +1685,7 @@ exports.createEventBooking = async (req, res) => {
     event_id,
     event_booking_date,
     platform_fee = 0,
+    total_amount = 0.0,
     stripe_key,
     items = [],
     attendee_info = [],
@@ -1735,7 +1735,11 @@ exports.createEventBooking = async (req, res) => {
 
     const lockedTicketsRes = await client.query(
       `
-      SELECT id, total_seats
+      SELECT 
+        id,
+        total_seats,
+        allow_companion,
+        companion_total_seats
       FROM company_event_tickets
       WHERE id = ANY($1::int[])
       FOR UPDATE
@@ -1754,6 +1758,7 @@ exports.createEventBooking = async (req, res) => {
       `
       SELECT
         bi.ticket_id,
+        bi.is_companion,
         COALESCE(SUM(bi.quantity), 0) AS booked_seats
       FROM event_booking_items bi
       JOIN event_bookings b
@@ -1761,42 +1766,62 @@ exports.createEventBooking = async (req, res) => {
       WHERE bi.ticket_id = ANY($1::int[])
         AND b.event_booking_date = $2
         AND b.status IN ('pending', 'confirmed')
-      GROUP BY bi.ticket_id
+      GROUP BY bi.ticket_id, bi.is_companion
       `,
       [ticketIds, event_booking_date]
     );
 
-    const bookedMap = {};
-    bookedSeatsRes.rows.forEach(row => {
-      bookedMap[row.ticket_id] = Number(row.booked_seats);
-    });
+   const bookedMap = {};
+
+  bookedSeatsRes.rows.forEach(row => {
+    const key = `${row.ticket_id}_${row.is_companion}`;
+    bookedMap[key] = Number(row.booked_seats);
+  });
 
     // ============================
     // ✅ STEP 3: VALIDATE EACH TICKET
     // ============================
-    for (const item of items) {
-      const ticketRow = lockedTicketsRes.rows.find(
-        t => t.id === item.ticket_id
-      );
+   for (const item of items) {
+    const ticketRow = lockedTicketsRes.rows.find(
+      t => t.id === item.ticket_id
+    );
 
-      const totalSeats = Number(ticketRow.total_seats);
-      const bookedSeats = bookedMap[item.ticket_id] || 0;
-      const availableSeats = totalSeats - bookedSeats;
+    const isCompanion = item.is_companion === true;
 
-      if (item.quantity > availableSeats) {
-        throw new Error(
-          `Only ${availableSeats} seats available for ${item.ticket_type}`
-        );
+    let totalSeats;
+    let bookedSeats;
+
+    if (isCompanion) {
+      if (!ticketRow.allow_companion) {
+        throw new Error(`Companion not allowed for ${item.ticket_type}`);
       }
+
+      totalSeats = Number(ticketRow.companion_total_seats || 0);
+      bookedSeats = bookedMap[`${item.ticket_id}_true`] || 0;
+    } else {
+      totalSeats = Number(ticketRow.total_seats || 0);
+      bookedSeats = bookedMap[`${item.ticket_id}_false`] || 0;
     }
+
+    const availableSeats = Math.max(0, totalSeats - bookedSeats);
+
+
+    if (item.quantity > availableSeats) {
+      throw new Error(
+        `Only ${availableSeats} ${
+          isCompanion ? "companion" : "main"
+        } seats available for ${item.ticket_type}`
+      );
+    }
+  }
 
     // ============================
     // 💰 STEP 4: CALCULATE TOTAL
     // ============================
-    const total_amount = items.reduce(
-      (sum, i) => sum + i.quantity * i.price_per_ticket,
-      0
-    );
+    // const total_amount = items.reduce(
+    //   (sum, i) => sum + i.quantity * i.price_per_ticket,
+    //   0
+    // );
 
     // ============================
     // 🧾 STEP 5: INSERT BOOKING
@@ -1867,10 +1892,23 @@ exports.createEventBooking = async (req, res) => {
     // 👥 STEP 6: INSERT ATTENDEES
     // ============================
 
+   // 🔢 1️⃣ Calculate total ticket quantity
+    const totalTicketQty = items.reduce(
+      (sum, item) => sum + Number(item.quantity || 0),
+      0
+    );
+
+    const providedAttendeeCount = attendee_info.length;
+
+    // 🚨 Optional safety check
+    if (providedAttendeeCount > totalTicketQty) {
+      throw new Error("Attendees count cannot exceed total ticket quantity");
+    }
+
     let ticketCounter = 1;
 
+    // 2️⃣ Insert provided attendees first
     for (const attendee of attendee_info) {
-
       const attendeeName =
         attendee.full_name && attendee.full_name.trim() !== ""
           ? attendee.full_name
@@ -1891,13 +1929,38 @@ exports.createEventBooking = async (req, res) => {
           booking_id,
           attendeeName,
           attendee.email || null,
-          "pending"
+          "pending",
         ]
       );
 
       ticketCounter++;
     }
 
+    // 3️⃣ Auto-create remaining attendees
+    const remainingTickets = totalTicketQty - providedAttendeeCount;
+
+    for (let i = 0; i < remainingTickets; i++) {
+      await client.query(
+        `
+        INSERT INTO event_booking_attendees
+        (
+          booking_id,
+          attendee_name,
+          attendee_email,
+          checkin_status
+        )
+        VALUES ($1,$2,$3,$4)
+        `,
+        [
+          booking_id,
+          `Ticket ${ticketCounter}`,
+          null,
+          "pending",
+        ]
+      );
+
+      ticketCounter++;
+    }
     // ============================
     // 💳 STEP 7: STRIPE PAYMENT
     // ============================

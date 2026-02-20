@@ -256,8 +256,7 @@ exports.getUserBookingById = async (req, res) => {
 
         additional_charges: Number(booking.platform_fee || 0),
         total_payable_amount:
-          Number(booking.total_amount) +
-          Number(booking.platform_fee || 0),
+          Number(booking.total_amount),
       },
     });
   } catch (err) {
@@ -451,6 +450,23 @@ exports.scanQrCode = async (req, res) => {
       [booking.id]
     );
 
+    // 🎟 Fetch ticket items (NEW)
+   const ticketItemsRes = await pool.query(
+  `
+  SELECT 
+    ticket_id,
+    MAX(CASE WHEN is_companion = FALSE THEN ticket_type END) AS ticket_type,
+    COALESCE(SUM(CASE WHEN is_companion = FALSE THEN quantity END), 0) AS quantity,
+    MAX(CASE WHEN is_companion = TRUE THEN ticket_type END) AS companion_ticket_type,
+    COALESCE(SUM(CASE WHEN is_companion = TRUE THEN quantity END), 0) AS companion_quantity
+  FROM event_booking_items
+  WHERE booking_id = $1
+  GROUP BY ticket_id
+  ORDER BY ticket_id ASC
+  `,
+  [booking.id]
+);
+
     return res.json({
       status: true,
       data: {
@@ -471,6 +487,7 @@ exports.scanQrCode = async (req, res) => {
           company_name: booking.company_name,
           company_email: booking.company_email
         },
+        tickets: ticketItemsRes.rows, // ✅ Added here
         attendees: attendeesRes.rows
       }
     });
